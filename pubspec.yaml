@@ -38,6 +38,7 @@ dependencies:
   receive_sharing_intent: ^1.8.1
   gal: ^2.3.2
   wallpaper_manager_plus: ^2.0.3
+  image: ^4.2.0
 
 dev_dependencies:
   flutter_test:
@@ -60,6 +61,14 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  shaders:
+    - effects/shaders/narrow_reed.glsl
+    - effects/shaders/wide_reed.glsl
+    - effects/shaders/lumina.glsl
+    - effects/shaders/grid.glsl
+    - effects/shaders/liquid.glsl
+    - effects/shaders/ripple.glsl
 
   # To add assets to your application, add an assets section, like this:
   # assets:
