@@ -39,6 +39,7 @@ dependencies:
   gal: ^2.3.2
   wallpaper_manager_plus: ^2.0.3
   image: ^4.2.0
+  path_provider: ^2.1.0
 
 dev_dependencies:
   flutter_test:
