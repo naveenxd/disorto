@@ -36,8 +36,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   image_picker: ^1.2.1
   receive_sharing_intent: ^1.8.1
-  flutter_wallpaper_manager: ^0.0.4
   gal: ^2.3.2
+  wallpaper_manager_plus: ^2.0.3
 
 dev_dependencies:
   flutter_test:
