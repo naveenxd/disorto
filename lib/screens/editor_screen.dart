@@ -3,11 +3,11 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:wallpaper_manager_plus/wallpaper_manager_plus.dart';
 
 import '../effects/effect_renderer.dart';
+import '../services/image_export_service.dart';
+import '../services/wallpaper_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EditorScreen
@@ -203,10 +203,12 @@ class _EditorScreenState extends State<EditorScreen> {
     setState(() => _saving = true);
     try {
       final path = await _exportToTemp();
-      await Gal.putImage(path);
+      await ImageExportService.saveFileToGallery(path);
       if (mounted) {
         _showSnack('Saved to gallery ✓');
       }
+    } on ExportException catch (e) {
+      if (mounted) _showSnack(e.message);
     } catch (e) {
       if (mounted) _showSnack('Save failed: $e');
     } finally {
@@ -235,8 +237,13 @@ class _EditorScreenState extends State<EditorScreen> {
     setState(() => _wallpapering = true);
     try {
       final path = await _exportToTemp();
-      await WallpaperManagerPlus().setWallpaper(File(path), location);
+      await WallpaperService.setWallpaper(
+        imagePath: path,
+        location: location,
+      );
       if (mounted) _showSnack('Wallpaper set ✓');
+    } on WallpaperException catch (e) {
+      if (mounted) _showSnack(e.message);
     } catch (e) {
       if (mounted) _showSnack('Failed: $e');
     } finally {
@@ -831,19 +838,19 @@ class _WallpaperSheet extends StatelessWidget {
             _WallpaperOption(
               icon: Icons.home_outlined,
               label: 'Home Screen',
-              onTap: () => onSelect(WallpaperManagerPlus.homeScreen),
+              onTap: () => onSelect(WallpaperService.homeScreen),
             ),
             const SizedBox(height: 10),
             _WallpaperOption(
               icon: Icons.lock_outline_rounded,
               label: 'Lock Screen',
-              onTap: () => onSelect(WallpaperManagerPlus.lockScreen),
+              onTap: () => onSelect(WallpaperService.lockScreen),
             ),
             const SizedBox(height: 10),
             _WallpaperOption(
               icon: Icons.layers_outlined,
               label: 'Both',
-              onTap: () => onSelect(WallpaperManagerPlus.bothScreens),
+              onTap: () => onSelect(WallpaperService.bothScreens),
             ),
             const SizedBox(height: 8),
           ],
