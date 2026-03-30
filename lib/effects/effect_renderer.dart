@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -253,14 +254,15 @@ class EffectRenderer {
     final blurredBytes = await compute(_blurIsolate, params);
 
     // Convert blurred RGBA bytes back to ui.Image.
-    final codec = await ui.instantiateImageCodecFromBuffer(
-      await ui.ImmutableBuffer.fromUint8List(blurredBytes),
-      targetWidth: image.width,
-      targetHeight: image.height,
+    final completer = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      blurredBytes,
+      image.width,
+      image.height,
+      ui.PixelFormat.rgba8888,
+      (result) => completer.complete(result),
     );
-    final frame = await codec.getNextFrame();
-    codec.dispose();
-    return frame.image;
+    return completer.future;
   }
 
   // ── Dispose ───────────────────────────────────────────────────────────────
