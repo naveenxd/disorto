@@ -10,23 +10,33 @@ out vec4 fragColor;
 
 void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
-    
-    float count = 18.0;
-    float bar = fract(uv.x * count);
-    
-    // Wider glass profile
-    float glassNormal = pow(sin(bar * 3.14159), 0.5);
-    float refract = (bar - 0.5) * (1.0 - glassNormal) * 0.06 * uIntensity;
-    
-    vec2 finalUv = clamp(vec2(uv.x + refract, uv.y), 0.0, 1.0);
-    
-    float r = texture(uTexture, finalUv + 0.002 * uIntensity).r;
-    float g = texture(uTexture, finalUv).g;
-    float b = texture(uTexture, finalUv - 0.002 * uIntensity).b;
-    
-    // Shadowing the joints between panels
-    float shadow = smoothstep(0.0, 0.1, bar) * smoothstep(1.0, 0.9, bar);
-    vec3 color = vec3(r, g, b) * (0.85 + 0.15 * shadow);
-    
+
+    // 15 wider vertical glass rods
+    const float count = 15.0;
+    float strip = floor(uv.x * count);
+    float bar   = fract(uv.x * count);
+
+    // Glass-rod lens curve
+    float lensCurve = sin(bar * 3.14159265);
+
+    // Stronger X refraction than narrow reed (~0.04 max)
+    float refractX = (bar - 0.5) * lensCurve * 0.08 * uIntensity;
+
+    // Vertical offset per strip — each rod shifts Y slightly differently
+    // giving a subtle "offset pane" look visible in wide_reed reference
+    float refractY = sin(strip * 1.37) * 0.018 * uIntensity;
+
+    vec2 finalUv = clamp(vec2(uv.x + refractX, uv.y + refractY), 0.0, 1.0);
+
+    vec3 color = texture(uTexture, finalUv).rgb;
+
+    // Specular highlight
+    float spec = pow(lensCurve, 6.0) * 0.1 * uIntensity;
+    color += spec;
+
+    // Dark divider seam between rods
+    float seam = smoothstep(0.0, 0.07, bar) * smoothstep(1.0, 0.93, bar);
+    color *= mix(1.0, 0.88 + 0.12 * seam, uIntensity);
+
     fragColor = vec4(color, 1.0);
 }

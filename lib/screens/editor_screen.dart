@@ -103,7 +103,10 @@ class _EditorScreenState extends State<EditorScreen> {
 
   Future<void> _rerender() async {
     if (_sourceImage == null || _rendering) return;
-    _rendering = true;
+
+    // Commit _rendering=true to the framework NOW so the spinner shows
+    // while the shader + blur (compute isolate) work in the background.
+    setState(() => _rendering = true);
 
     final result = await _renderer.render(
       source:    _sourceImage!,

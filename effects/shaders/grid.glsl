@@ -10,28 +10,36 @@ out vec4 fragColor;
 
 void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
-    float aspect = uWidth / uHeight;
-    vec2 gridCount = vec2(10.0, 10.0 / aspect);
-    
-    vec2 tileUv = fract(uv * gridCount);
-    
-    // Calculate distance to center for the "Lens" effect
-    vec2 p = (tileUv - 0.5) * 2.0;
-    float d = dot(p, p);
-    float refract = d * 0.05 * uIntensity;
-    
-    vec2 finalUv = clamp(uv + (p * refract * 0.1), 0.0, 1.0);
-    
-    // Create the "Bezel" (shading the tile edges)
-    float bezel = smoothstep(0.4, 0.5, abs(tileUv.x - 0.5)) + 
-                  smoothstep(0.4, 0.5, abs(tileUv.y - 0.5));
-    
-    float r = texture(uTexture, finalUv + 0.003 * uIntensity).r;
-    float g = texture(uTexture, finalUv).g;
-    float b = texture(uTexture, finalUv - 0.003 * uIntensity).b;
-    
-    vec3 color = vec3(r, g, b);
-    color = mix(color, color * 0.6, bezel * 0.5 * uIntensity);
-    
+
+    // Cell size ~60px in UV space
+    vec2 cellSize = vec2(60.0 / uWidth, 60.0 / uHeight);
+
+    // Which cell we're in and where within it (0→1)
+    vec2 cellIndex = floor(uv / cellSize);
+    vec2 cellUV    = fract(uv / cellSize);  // 0→1 within the cell
+
+    // Offset from cell centre (−0.5 → +0.5)
+    vec2 offset = cellUV - vec2(0.5);
+    float dist  = length(offset);
+
+    // Convex lens: push pixels outward radially from cell centre.
+    // The closer to centre, the more they're pushed out (inward fetch = outward push).
+    float lensStrength = uIntensity * 0.35;
+    vec2 lensOffset = offset * (1.0 - dist * 1.8) * lensStrength;
+
+    vec2 finalUv = clamp(uv + lensOffset, 0.0, 1.0);
+
+    vec3 color = texture(uTexture, finalUv).rgb;
+
+    // Thin dark border at cell edges using min of distances to all 4 edges
+    float edgeDist = min(min(cellUV.x, 1.0 - cellUV.x),
+                         min(cellUV.y, 1.0 - cellUV.y));
+    float border = 1.0 - smoothstep(0.0, 0.06, edgeDist);
+    color = mix(color, color * 0.35, border * uIntensity);
+
+    // Subtle specular glint in the centre of each lens
+    float spec = pow(max(0.0, 1.0 - dist * 3.0), 6.0) * 0.12 * uIntensity;
+    color += spec;
+
     fragColor = vec4(color, 1.0);
 }
