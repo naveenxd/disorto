@@ -10,15 +10,23 @@ out vec4 fragColor;
 
 void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
+    float falloff = 0.35 + 0.65 * pow(uv.y, 1.35);
+    float warpX =
+        sin(uv.y * 8.5 + uv.x * 5.5) * 0.030 +
+        sin(uv.y * 15.0 - uv.x * 3.5) * 0.018 +
+        sin(uv.y * 28.0 + uv.x * 1.8) * 0.010;
+    float warpY =
+        sin(uv.x * 9.0 + uv.y * 4.5) * 0.010 +
+        sin(uv.x * 18.0 - uv.y * 2.0) * 0.006;
 
-    // Horizontal displacement ONLY — overlapping low-frequency sine waves.
-    // Wave 1: higher frequency, full strength
-    float w1 = sin(uv.y * 12.0) * 0.04 * uIntensity;
-    // Wave 2: lower frequency, phase-shifted, softer
-    float w2 = sin(uv.y * 7.0 + 1.5) * 0.025 * uIntensity;
+    vec2 warped = uv;
+    warped.x += warpX * falloff * uIntensity;
+    warped.y += warpY * falloff * uIntensity;
+    warped = clamp(warped, 0.0, 1.0);
 
-    // Only X is displaced — pure horizontal liquid shear
-    vec2 finalUv = clamp(vec2(uv.x + w1 + w2, uv.y), 0.0, 1.0);
+    vec3 color = texture(uTexture, warped).rgb;
+    float sheen = smoothstep(0.0, 1.0, falloff) * 0.04;
+    color += sheen * uIntensity;
 
-    fragColor = vec4(texture(uTexture, finalUv).rgb, 1.0);
+    fragColor = vec4(color, 1.0);
 }

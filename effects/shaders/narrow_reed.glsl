@@ -8,34 +8,41 @@ uniform float uIntensity;
 uniform sampler2D uTexture;
 out vec4 fragColor;
 
+float tri(float x) {
+    return abs(fract(x) - 0.5) * 2.0;
+}
+
 void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
+    vec2 px = 1.0 / vec2(uWidth, uHeight);
+    float columns = 34.0;
+    float gx = uv.x * columns;
+    float col = floor(gx);
+    float localX = fract(gx) - 0.5;
+    float ridge = pow(1.0 - smoothstep(0.02, 0.5, abs(localX)), 1.5);
 
-    // 50 vertical glass rods
-    const float count = 50.0;
-    float strip = floor(uv.x * count);
-    float bar   = fract(uv.x * count);  // 0→1 within each rod
+    float teethA = sin(uv.y * 96.0 + col * 0.85);
+    float teethB = sin(uv.y * 164.0 - col * 1.73);
+    float teethC = tri(uv.y * 38.0 + col * 0.11) * 2.0 - 1.0;
+    float shard = (teethA * 0.55 + teethB * 0.30 + teethC * 0.15);
+    shard = sign(shard) * pow(abs(shard), 1.9);
 
-    // Glass-rod lens curve: sin(bar*PI) peaks at bar=0.5 (centre of rod)
-    float lensCurve = sin(bar * 3.14159265);
+    float xBend = localX * ridge * 0.060 * uIntensity;
+    float xShard = shard * ridge * 0.010 * uIntensity;
+    float ySmear = shard * ridge * (0.010 + 0.020 * uv.y) * uIntensity;
 
-    // Horizontal-only refraction: push pixels toward/away from rod centre.
-    // (bar - 0.5) gives direction; lensCurve gives magnitude.
-    // Max displacement ≈ 0.5 * 0.02 * 2 = 0.02 UV units (subtle, as requested)
-    float refractX = (bar - 0.5) * lensCurve * 0.04 * uIntensity;
-
-    // NO Y displacement — vertical rods only displace X
-    vec2 finalUv = clamp(vec2(uv.x + refractX, uv.y), 0.0, 1.0);
-
+    vec2 finalUv = clamp(uv + vec2(xBend + xShard, ySmear), 0.0, 1.0);
     vec3 color = texture(uTexture, finalUv).rgb;
 
-    // Specular highlight at the crown of each rod (where lensCurve peaks)
-    float spec = pow(lensCurve, 8.0) * 0.08 * uIntensity;
-    color += spec;
+    float seam = 1.0 - smoothstep(0.42, 0.50, abs(localX));
+    float highlight = ridge * 0.075 + seam * 0.020;
+    float shadow = seam * 0.12;
+    color += highlight * uIntensity;
+    color *= 1.0 - shadow * uIntensity;
 
-    // Thin dark groove between rods: darken near the joint (bar≈0 or bar≈1)
-    float groove = smoothstep(0.0, 0.06, bar) * smoothstep(1.0, 0.94, bar);
-    color *= mix(1.0, 0.92 + 0.08 * groove, uIntensity);
+    vec3 left = texture(uTexture, clamp(finalUv - vec2(px.x * 2.0, 0.0), 0.0, 1.0)).rgb;
+    vec3 right = texture(uTexture, clamp(finalUv + vec2(px.x * 2.0, 0.0), 0.0, 1.0)).rgb;
+    color += (right - left) * ridge * 0.18 * uIntensity;
 
     fragColor = vec4(color, 1.0);
 }

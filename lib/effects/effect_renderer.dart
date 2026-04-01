@@ -55,12 +55,16 @@ class _BlurParams {
     required this.bytes,
     required this.width,
     required this.height,
+    required this.scaledWidth,
+    required this.scaledHeight,
     required this.radius,
   });
 
   final Uint8List bytes;  // Raw RGBA bytes of the image to blur
   final int width;
   final int height;
+  final int scaledWidth;
+  final int scaledHeight;
   final int radius;       // Gaussian blur radius in pixels
 }
 
@@ -68,7 +72,7 @@ class _BlurParams {
 /// Returns the blurred image as raw RGBA [Uint8List].
 Uint8List _blurIsolate(_BlurParams p) {
   // Decode raw RGBA bytes into an img.Image.
-  final source = img.Image.fromBytes(
+  img.Image working = img.Image.fromBytes(
     width: p.width,
     height: p.height,
     bytes: p.bytes.buffer,
@@ -76,11 +80,30 @@ Uint8List _blurIsolate(_BlurParams p) {
     order: img.ChannelOrder.rgba,
   );
 
-  // Apply Gaussian blur.
-  final blurred = img.gaussianBlur(source, radius: p.radius);
+  // Downsample before blurring for a softer glass-like result and better speed.
+  if (p.scaledWidth != p.width || p.scaledHeight != p.height) {
+    working = img.copyResize(
+      working,
+      width: p.scaledWidth,
+      height: p.scaledHeight,
+      interpolation: img.Interpolation.average,
+    );
+  }
+
+  working = img.gaussianBlur(working, radius: p.radius);
+
+  // Re-expand to the original resolution after blur.
+  if (working.width != p.width || working.height != p.height) {
+    working = img.copyResize(
+      working,
+      width: p.width,
+      height: p.height,
+      interpolation: img.Interpolation.cubic,
+    );
+  }
 
   // Return as raw RGBA bytes.
-  return blurred.toUint8List();
+  return working.toUint8List();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -138,7 +161,8 @@ class EffectRenderer {
   /// Gaussian blur at [blurLevel] steps (0 = none, 4 = heaviest).
   ///
   /// Always processes at the full resolution of [source].
-  /// Blur is applied on a background isolate via [compute].
+  /// Blur is applied to the base image first, then the selected shader distorts
+  /// that blurred image. This matches the app's reference behavior.
   ///
   /// Returns a new [ui.Image] that the caller owns and must [dispose].
   Future<ui.Image> render({
@@ -152,18 +176,23 @@ class EffectRenderer {
     assert(blurLevel >= 0 && blurLevel <= 4,
         'blurLevel must be in [0, 4]');
 
-    // Step 1: Apply shader distortion (or pass through for original).
-    ui.Image distorted = await _applyShader(
-      source: source,
+    ui.Image working = source;
+
+    // Step 1: Blur the base image first so the effect refracts the blurred
+    // content instead of blurring the already-distorted output.
+    if (blurLevel > 0) {
+      working = await _applyBlur(image: source, blurLevel: blurLevel);
+    }
+
+    // Step 2: Apply shader distortion (or pass through for original).
+    final distorted = await _applyShader(
+      source: working,
       effect: effect,
       intensity: intensity,
     );
 
-    // Step 2: Apply Gaussian blur on isolate (if requested).
     if (blurLevel > 0) {
-      final blurred = await _applyBlur(image: distorted, blurLevel: blurLevel);
-      distorted.dispose();
-      return blurred;
+      working.dispose();
     }
 
     return distorted;
@@ -231,7 +260,8 @@ class EffectRenderer {
   /// Applies Gaussian blur to [image] using the `image` package on a
   /// background isolate via [compute], keeping the main thread unblocked.
   ///
-  /// [blurLevel] maps to blur radius: level × 4 (level 1 → r4, level 4 → r16).
+  /// The blur is downsampled before processing to avoid the harsh, smeared
+  /// look produced by full-resolution post-effect blurring.
   Future<ui.Image> _applyBlur({
     required ui.Image image,
     required int blurLevel,
@@ -239,15 +269,32 @@ class EffectRenderer {
     // Convert ui.Image → raw RGBA bytes (on main thread — must be here).
     final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
     if (byteData == null) {
-      // Fallback: return original image untouched.
-      return image;
+      return _copyImage(image);
     }
+
+    final scale = switch (blurLevel) {
+      1 => 0.80,
+      2 => 0.62,
+      3 => 0.48,
+      _ => 0.36,
+    };
+    final radius = switch (blurLevel) {
+      1 => 5,
+      2 => 8,
+      3 => 12,
+      _ => 16,
+    };
+    final scaledWidth = (image.width * scale).round().clamp(1, image.width);
+    final scaledHeight =
+        (image.height * scale).round().clamp(1, image.height);
 
     final params = _BlurParams(
       bytes: byteData.buffer.asUint8List(),
       width: image.width,
       height: image.height,
-      radius: blurLevel * 4,  // 1→4, 2→8, 3→12, 4→16
+      scaledWidth: scaledWidth,
+      scaledHeight: scaledHeight,
+      radius: radius,
     );
 
     // Run the blur on a background isolate — never blocks the UI thread.
@@ -263,6 +310,19 @@ class EffectRenderer {
       (result) => completer.complete(result),
     );
     return completer.future;
+  }
+
+  Future<ui.Image> _copyImage(ui.Image source) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(
+      recorder,
+      Rect.fromLTWH(0, 0, source.width.toDouble(), source.height.toDouble()),
+    );
+    canvas.drawImage(source, Offset.zero, Paint());
+    final picture = recorder.endRecording();
+    final copy = await picture.toImage(source.width, source.height);
+    picture.dispose();
+    return copy;
   }
 
   // ── Dispose ───────────────────────────────────────────────────────────────

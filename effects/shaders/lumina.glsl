@@ -10,16 +10,23 @@ out vec4 fragColor;
 
 void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
+    float columns = 10.0;
+    float gx = uv.x * columns;
+    float localX = fract(gx) - 0.5;
+    float ridge = pow(1.0 - smoothstep(0.06, 0.5, abs(localX)), 1.8);
+    float rise = pow(uv.y, 1.7);
+    float phase = sin(uv.y * 20.0 + floor(gx) * 0.9);
 
-    // Sample brightness at the CURRENT pixel (no noise, no horizontal sin)
-    vec3 srcColor = texture(uTexture, uv).rgb;
-    float brightness = dot(srcColor, vec3(0.299, 0.587, 0.114));
+    vec2 finalUv = uv;
+    finalUv.x += phase * ridge * 0.006 * uIntensity;
+    finalUv.y -= ridge * rise * 0.095 * uIntensity;
+    finalUv.y += localX * localX * 0.018 * rise * uIntensity;
+    finalUv = clamp(finalUv, 0.0, 1.0);
 
-    // Displace Y UPWARD proportional to brightness.
-    // Stronger at the bottom (1.0 - uv.y is large there), fades toward top.
-    // Bright pixels "spike" upward — the mountain peaks elongate dramatically.
-    float dispY = brightness * uIntensity * 0.4 * (1.0 - uv.y);
-    vec2 finalUv = clamp(vec2(uv.x, uv.y - dispY), 0.0, 1.0);
+    vec3 color = texture(uTexture, finalUv).rgb;
+    float seam = 1.0 - smoothstep(0.40, 0.50, abs(localX));
+    color += ridge * 0.040 * uIntensity;
+    color *= 1.0 - seam * 0.08 * uIntensity;
 
-    fragColor = vec4(texture(uTexture, finalUv).rgb, 1.0);
+    fragColor = vec4(color, 1.0);
 }

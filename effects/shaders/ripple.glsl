@@ -10,36 +10,27 @@ out vec4 fragColor;
 
 void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
-
-    // Correct for aspect ratio so ripples are circular, not elliptical
     float aspect = uWidth / uHeight;
-    vec2 center  = vec2(0.5, 0.5);
-    vec2 delta   = uv - center;
-    delta.x     *= aspect;
+    vec2 center = vec2(0.50, 0.57);
+    vec2 delta = uv - center;
+    delta.x *= aspect;
 
-    float dist  = length(delta);
-    float angle = atan(delta.y, delta.x);
+    float dist = length(delta);
+    float lens = smoothstep(0.64, 0.0, dist);
+    float rings = sin(dist * 42.0 - 0.6) * 0.013 * smoothstep(0.80, 0.06, dist);
+    float swirl = (1.0 - smoothstep(0.0, 0.65, dist)) * 0.40 * uIntensity;
 
-    // Radial ripple: sin-based rings with exponential decay
-    float ripple = sin(dist * 25.0) * exp(-dist * 3.0) * 0.04 * uIntensity;
+    float angle = atan(delta.y, delta.x) + swirl;
+    float radius = dist * (1.0 - lens * 0.42 * uIntensity) + rings * uIntensity;
 
-    // Swirl: rotate pixels based on distance from centre.
-    // Strongest at centre (dist≈0), fades outward.
-    float swirl = uIntensity * (1.0 - dist) * 1.5;
-    float newAngle = angle + swirl;
+    vec2 displaced = vec2(
+        center.x + cos(angle) * radius / aspect,
+        center.y + sin(angle) * radius
+    );
+    displaced = clamp(displaced, 0.0, 1.0);
 
-    // Reconstruct displaced position
-    vec2 displaced;
-    displaced.x = center.x + cos(newAngle) * (dist + ripple) / aspect;
-    displaced.y = center.y + sin(newAngle) * (dist + ripple);
-    displaced    = clamp(displaced, 0.0, 1.0);
+    vec3 color = texture(uTexture, displaced).rgb;
+    color += lens * 0.06 * uIntensity;
 
-    // Subtle chromatic aberration (~0.002 UV offset)
-    float caStrength = 0.002 * uIntensity;
-    vec2 caOffset    = normalize(delta + vec2(0.0001)) * caStrength;
-    float r = texture(uTexture, clamp(displaced + caOffset, 0.0, 1.0)).r;
-    float g = texture(uTexture, displaced).g;
-    float b = texture(uTexture, clamp(displaced - caOffset, 0.0, 1.0)).b;
-
-    fragColor = vec4(r, g, b, 1.0);
+    fragColor = vec4(color, 1.0);
 }

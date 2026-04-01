@@ -10,36 +10,31 @@ out vec4 fragColor;
 
 void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
+    float cellsX = 6.8;
+    float cellsY = cellsX * (uHeight / uWidth);
+    vec2 grid = vec2(cellsX, cellsY);
+    vec2 cellUv = fract(uv * grid) - 0.5;
+    vec2 cellId = floor(uv * grid);
 
-    // Cell size ~60px in UV space
-    vec2 cellSize = vec2(60.0 / uWidth, 60.0 / uHeight);
+    float radius = length(max(abs(cellUv) - vec2(0.28), 0.0));
+    float tileMask = 1.0 - smoothstep(0.06, 0.12, radius);
+    float bulge = (0.19 - dot(cellUv, cellUv)) * tileMask;
+    vec2 offset = cellUv * bulge * 0.95 * uIntensity;
 
-    // Which cell we're in and where within it (0→1)
-    vec2 cellIndex = floor(uv / cellSize);
-    vec2 cellUV    = fract(uv / cellSize);  // 0→1 within the cell
-
-    // Offset from cell centre (−0.5 → +0.5)
-    vec2 offset = cellUV - vec2(0.5);
-    float dist  = length(offset);
-
-    // Convex lens: push pixels outward radially from cell centre.
-    // The closer to centre, the more they're pushed out (inward fetch = outward push).
-    float lensStrength = uIntensity * 0.35;
-    vec2 lensOffset = offset * (1.0 - dist * 1.8) * lensStrength;
-
-    vec2 finalUv = clamp(uv + lensOffset, 0.0, 1.0);
-
+    vec2 finalUv = clamp(uv + offset / grid, 0.0, 1.0);
     vec3 color = texture(uTexture, finalUv).rgb;
 
-    // Thin dark border at cell edges using min of distances to all 4 edges
-    float edgeDist = min(min(cellUV.x, 1.0 - cellUV.x),
-                         min(cellUV.y, 1.0 - cellUV.y));
-    float border = 1.0 - smoothstep(0.0, 0.06, edgeDist);
-    color = mix(color, color * 0.35, border * uIntensity);
+    float edgeX = 1.0 - smoothstep(0.34, 0.48, abs(cellUv.x));
+    float edgeY = 1.0 - smoothstep(0.34, 0.48, abs(cellUv.y));
+    float seam = max(edgeX, edgeY);
+    float highlight = smoothstep(-0.50, 0.10, -(cellUv.x + cellUv.y)) * seam;
+    float shadow = smoothstep(-0.10, 0.55, cellUv.x + cellUv.y) * seam;
 
-    // Subtle specular glint in the centre of each lens
-    float spec = pow(max(0.0, 1.0 - dist * 3.0), 6.0) * 0.12 * uIntensity;
-    color += spec;
+    color += highlight * 0.10 * uIntensity;
+    color *= 1.0 - shadow * 0.22 * uIntensity;
+
+    float centerGlint = pow(max(0.0, 1.0 - length(cellUv) * 2.1), 5.0);
+    color += centerGlint * 0.05 * uIntensity;
 
     fragColor = vec4(color, 1.0);
 }
