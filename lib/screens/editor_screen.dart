@@ -83,7 +83,10 @@ class _EditorScreenState extends State<EditorScreen> {
     super.initState();
     _loadingBackground = FileImage(File(widget.imagePath));
     _editorLoadStartedAt = DateTime.now();
-    _bootstrap();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_bootstrap());
+    });
   }
 
   @override
@@ -532,56 +535,57 @@ class _EditorScreenState extends State<EditorScreen> {
         backgroundColor: const Color(0xFF0A0A0A),
         body: Stack(
           children: [
-            // ── Full-screen image preview ────────────────────────────────
-            _PreviewPane(
-              previewImage: _previewImage ?? _previewSource,
-              initialising: _previewSource == null,
-            ),
-
-            // ── Top-right action buttons ─────────────────────────────────
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 8,
-              right: 12,
-              child: _TopActions(
-                saving: _saving,
-                wallpapering: _wallpapering,
-                onSave: _onSave,
-                onWallpaper: _onSetWallpaper,
+            if (_isEditorReady) ...[
+              // ── Full-screen image preview ──────────────────────────────
+              _PreviewPane(
+                previewImage: _previewImage ?? _previewSource,
+                initialising: _previewSource == null,
               ),
-            ),
 
-            // ── Back button ──────────────────────────────────────────────
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 8,
-              left: 4,
-              child: IconButton(
-                icon: const Icon(
-                  Icons.arrow_back_ios_new_rounded,
-                  color: Colors.white,
-                  size: 20,
+              // ── Top-right action buttons ───────────────────────────────
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 8,
+                right: 12,
+                child: _TopActions(
+                  saving: _saving,
+                  wallpapering: _wallpapering,
+                  onSave: _onSave,
+                  onWallpaper: _onSetWallpaper,
                 ),
-                onPressed: () => Navigator.maybePop(context),
               ),
-            ),
 
-            // ── Persistent bottom sheet ──────────────────────────────────
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: _BottomPanel(
-                blurValue: _rawBlurValue,
-                isDraggingBlur: _isBlurDragging,
-                snappedBlurIndex: _snappedBlurIndex,
-                blurSteps: _blurLevels - 1,
-                selectedEffect: _effect,
-                onBlurChanged: _onBlurChanged,
-                onBlurChangeStart: _onBlurDragStart,
-                onBlurChangeEnd: _onBlurDragEnd,
-                onEffectSelected: _onEffectSelected,
+              // ── Back button ────────────────────────────────────────────
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 8,
+                left: 4,
+                child: IconButton(
+                  icon: const Icon(
+                    Icons.arrow_back_ios_new_rounded,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                  onPressed: () => Navigator.maybePop(context),
+                ),
               ),
-            ),
 
+              // ── Persistent bottom sheet ────────────────────────────────
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: _BottomPanel(
+                  blurValue: _rawBlurValue,
+                  isDraggingBlur: _isBlurDragging,
+                  snappedBlurIndex: _snappedBlurIndex,
+                  blurSteps: _blurLevels - 1,
+                  selectedEffect: _effect,
+                  onBlurChanged: _onBlurChanged,
+                  onBlurChangeStart: _onBlurDragStart,
+                  onBlurChangeEnd: _onBlurDragEnd,
+                  onEffectSelected: _onEffectSelected,
+                ),
+              ),
+            ],
             if (!_isEditorReady || _saving || _wallpapering)
               Positioned.fill(
                 child: IgnorePointer(
