@@ -63,7 +63,9 @@ const List<BlurPreset> kBlurPresets = [
 class _RenderParams {
   const _RenderParams({
     required this.sourceBytes,
-    required this.blurBytes,
+    required this.blurBytesLow,
+    required this.blurBytesHigh,
+    required this.blurMix,
     required this.width,
     required this.height,
     required this.intensity,
@@ -73,13 +75,27 @@ class _RenderParams {
   });
 
   final Uint8List sourceBytes;
-  final Uint8List blurBytes;
+  final Uint8List blurBytesLow;
+  final Uint8List blurBytesHigh;
+  final double blurMix;
   final int width;
   final int height;
   final double intensity;
   final int mapWidth;
   final int mapHeight;
   final Float32List mapData;
+}
+
+class _BlendParams {
+  const _BlendParams({
+    required this.lowBytes,
+    required this.highBytes,
+    required this.mix,
+  });
+
+  final Uint8List lowBytes;
+  final Uint8List highBytes;
+  final double mix;
 }
 
 Uint8List _blurIsolate(_BlurParams p) {
@@ -268,7 +284,9 @@ _EffectMap _generateEffectMap(DistortionEffect effect) {
 
 Uint8List _renderEffectIsolate(_RenderParams p) {
   final source = p.sourceBytes;
-  final blur = p.blurBytes;
+  final blurLow = p.blurBytesLow;
+  final blurHigh = p.blurBytesHigh;
+  final blurMix = p.blurMix.clamp(0.0, 1.0);
   final output = Uint8List(source.length);
   const originalDetailWeight = 0.08;
   const blurWeight = 1.0 - originalDetailWeight;
@@ -289,12 +307,24 @@ Uint8List _renderEffectIsolate(_RenderParams p) {
       final index = (y * p.width + x) * 4;
 
       // Pipeline: blur -> distortion -> final.
-      final blurredDistorted = _sampleBilinearBytes(
-        blur,
+      final blurredDistortedLow = _sampleBilinearBytes(
+        blurLow,
         p.width,
         p.height,
         sx,
         sy,
+      );
+      final blurredDistortedHigh = _sampleBilinearBytes(
+        blurHigh,
+        p.width,
+        p.height,
+        sx,
+        sy,
+      );
+      final blurredDistorted = (
+        r: _mix(blurredDistortedLow.r, blurredDistortedHigh.r, blurMix),
+        g: _mix(blurredDistortedLow.g, blurredDistortedHigh.g, blurMix),
+        b: _mix(blurredDistortedLow.b, blurredDistortedHigh.b, blurMix),
       );
       // Tiny optional detail contribution from original (not dominant).
       final originalDetail = _sampleBilinearBytes(
@@ -322,6 +352,19 @@ Uint8List _renderEffectIsolate(_RenderParams p) {
     }
   }
 
+  return output;
+}
+
+Uint8List _blendIsolate(_BlendParams p) {
+  final output = Uint8List(p.lowBytes.length);
+  final mix = p.mix.clamp(0.0, 1.0);
+  final inv = 1.0 - mix;
+  for (var i = 0; i < output.length; i++) {
+    output[i] = (p.lowBytes[i] * inv + p.highBytes[i] * mix).round().clamp(
+      0,
+      255,
+    );
+  }
   return output;
 }
 
@@ -386,6 +429,8 @@ class EffectRenderer {
   Future<ui.Image> render({
     required ui.Image source,
     required ui.Image blurredBase,
+    ui.Image? blurredBaseSecondary,
+    double blurMix = 0.0,
     required DistortionEffect effect,
     double intensity = 1.0,
   }) async {
@@ -408,10 +453,44 @@ class EffectRenderer {
       if (blurData == null) {
         return _copyImage(source);
       }
-
-      if (effect == DistortionEffect.original) {
+      final secondary = blurredBaseSecondary ?? blurredBase;
+      final blurDataSecondary = await secondary.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
+      );
+      if (blurDataSecondary == null) {
         return _decodeRgba(
           blurData.buffer.asUint8List(),
+          source.width,
+          source.height,
+        );
+      }
+
+      if (effect == DistortionEffect.original) {
+        final normalizedMix = blurMix.clamp(0.0, 1.0);
+        if (normalizedMix <= 0.0001) {
+          return _decodeRgba(
+            blurData.buffer.asUint8List(),
+            source.width,
+            source.height,
+          );
+        }
+        if (normalizedMix >= 0.9999) {
+          return _decodeRgba(
+            blurDataSecondary.buffer.asUint8List(),
+            source.width,
+            source.height,
+          );
+        }
+        final blended = await compute(
+          _blendIsolate,
+          _BlendParams(
+            lowBytes: blurData.buffer.asUint8List(),
+            highBytes: blurDataSecondary.buffer.asUint8List(),
+            mix: normalizedMix,
+          ),
+        );
+        return _decodeRgba(
+          blended,
           source.width,
           source.height,
         );
@@ -421,7 +500,9 @@ class EffectRenderer {
         _renderEffectIsolate,
         _RenderParams(
           sourceBytes: baseData.buffer.asUint8List(),
-          blurBytes: blurData.buffer.asUint8List(),
+          blurBytesLow: blurData.buffer.asUint8List(),
+          blurBytesHigh: blurDataSecondary.buffer.asUint8List(),
+          blurMix: blurMix.clamp(0.0, 1.0),
           width: source.width,
           height: source.height,
           intensity: intensity,

@@ -25,7 +25,6 @@ class EditorScreen extends StatefulWidget {
 
 class _EditorScreenState extends State<EditorScreen> {
   static final int _blurLevels = kBlurPresets.length;
-  static const int _previewCacheRadius = 1; // keep current +/-1 levels
   static const double _previewScale = 0.55; // 50-70% preview resolution
   static const int _previewMaxDimension = 1400; // hard cap for UI rendering
   static const Duration _renderDebounceDelay = Duration(milliseconds: 66);
@@ -112,10 +111,7 @@ class _EditorScreenState extends State<EditorScreen> {
 
     // Build downscaled copy for thumbnail rendering from preview source.
     _thumbSource = await _downscale(_previewSource!, targetWidth: 200);
-    _previewBlurBases[0] = await _renderer.prepareBlurredBase(
-      source: _previewSource!,
-      presetLevel: 0,
-    );
+    await _precomputeAllPreviewBlurLevels();
     _thumbBlurBases[0] = await _renderer.prepareBlurredBase(
       source: _thumbSource!,
       presetLevel: 0,
@@ -145,9 +141,8 @@ class _EditorScreenState extends State<EditorScreen> {
       final rendered = await _renderInterpolatedEffect(
         source: _previewSource!,
         effect: _effect,
-        blurIndex: _snappedBlurIndex,
+        blurValue: _rawBlurValue,
         blurCache: _previewBlurBases,
-        precomputeBlurWindow: !_isBlurDragging,
       );
       if (!mounted) {
         rendered.dispose();
@@ -204,11 +199,6 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
-  Future<void> _warmBlurCaches() async {
-    if (_previewSource == null) return;
-    await _ensurePreviewBlurWindow(_snappedBlurIndex);
-  }
-
   Future<void> _runBackgroundPrewarm() async {
     if (_previewSource == null) return;
     final source = _previewSource!;
@@ -224,7 +214,6 @@ class _EditorScreenState extends State<EditorScreen> {
       );
 
       await Future.wait([
-        _warmBlurCaches(),
         _renderer.prewarmIsolate(),
         _renderer.prewarmEffectMaps(
           DistortionEffect.values.where(
@@ -342,25 +331,9 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  Future<void> _ensurePreviewBlurWindow(int centerLevel) async {
-    final center = centerLevel.clamp(0, _blurLevels - 1);
-    final low = (center - _previewCacheRadius).clamp(0, _blurLevels - 1);
-    final high = (center + _previewCacheRadius).clamp(0, _blurLevels - 1);
-    for (var level = low; level <= high; level++) {
+  Future<void> _precomputeAllPreviewBlurLevels() async {
+    for (var level = 0; level < _blurLevels; level++) {
       await _precomputePreviewBlurLevel(level);
-    }
-    _trimPreviewBlurCache(center);
-  }
-
-  void _trimPreviewBlurCache(int centerLevel) {
-    final center = centerLevel.clamp(0, _blurLevels - 1);
-    final keepLow = (center - _previewCacheRadius).clamp(0, _blurLevels - 1);
-    final keepHigh = (center + _previewCacheRadius).clamp(0, _blurLevels - 1);
-    final removeKeys = _previewBlurBases.keys
-        .where((k) => k < keepLow || k > keepHigh)
-        .toList();
-    for (final key in removeKeys) {
-      _previewBlurBases.remove(key)?.dispose();
     }
   }
 
@@ -380,24 +353,37 @@ class _EditorScreenState extends State<EditorScreen> {
     return fallback;
   }
 
+  ({ui.Image low, ui.Image high, double mix}) _resolveBlurBlend({
+    required Map<int, ui.Image> cache,
+    required double blurValue,
+    required ui.Image fallback,
+  }) {
+    final steps = _blurLevels - 1;
+    final scaled = blurValue.clamp(0.0, 1.0) * steps;
+    final lowIndex = scaled.floor().clamp(0, steps);
+    final highIndex = scaled.ceil().clamp(0, steps);
+    final mix = (scaled - lowIndex).clamp(0.0, 1.0);
+    final low = _getCachedBlurLevel(cache, lowIndex, fallback);
+    final high = _getCachedBlurLevel(cache, highIndex, fallback);
+    return (low: low, high: high, mix: mix);
+  }
+
   Future<ui.Image> _renderInterpolatedEffect({
     required ui.Image source,
     required DistortionEffect effect,
-    required int blurIndex,
+    required double blurValue,
     required Map<int, ui.Image> blurCache,
-    bool precomputeBlurWindow = true,
   }) async {
-    if (precomputeBlurWindow && identical(blurCache, _previewBlurBases)) {
-      await _ensurePreviewBlurWindow(blurIndex);
-    }
-    final blurBase = _getCachedBlurLevel(
-      blurCache,
-      blurIndex.clamp(0, _blurLevels - 1),
-      source,
+    final blend = _resolveBlurBlend(
+      cache: blurCache,
+      blurValue: blurValue,
+      fallback: source,
     );
     return _renderer.render(
       source: source,
-      blurredBase: blurBase,
+      blurredBase: blend.low,
+      blurredBaseSecondary: blend.high,
+      blurMix: blend.mix,
       effect: effect,
       intensity: 1.0,
     );
@@ -410,7 +396,7 @@ class _EditorScreenState extends State<EditorScreen> {
   Future<void> _onEffectSelected(DistortionEffect effect) async {
     if (_effect == effect) return;
     setState(() => _effect = effect);
-    _scheduleDebouncedRender();
+    _scheduleDebouncedRender(immediate: true);
   }
 
   void _onBlurChanged(double value) {
@@ -418,14 +404,11 @@ class _EditorScreenState extends State<EditorScreen> {
     if ((_rawBlurValue - clamped).abs() < 0.0001) return;
     final steps = _blurLevels - 1;
     final nextIndex = (clamped * steps).round().clamp(0, steps);
-    final blurIndexChanged = nextIndex != _snappedBlurIndex;
     setState(() {
       _rawBlurValue = clamped;
       _snappedBlurIndex = nextIndex;
     });
-    if (blurIndexChanged) {
-      _scheduleDebouncedRender();
-    }
+    _scheduleDebouncedRender(immediate: true);
   }
 
   void _onBlurDragStart(double _) {
@@ -457,7 +440,7 @@ class _EditorScreenState extends State<EditorScreen> {
     if (shouldRender) {
       HapticFeedback.selectionClick();
     }
-    _scheduleDebouncedRender();
+    _scheduleDebouncedRender(immediate: true);
   }
 
   void _scheduleDebouncedRender({bool immediate = false}) {
