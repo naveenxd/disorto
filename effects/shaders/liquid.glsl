@@ -5,28 +5,32 @@ precision highp float;
 uniform float uWidth;
 uniform float uHeight;
 uniform float uIntensity;
-uniform sampler2D uTexture;
+uniform sampler2D uSourceTexture;
+uniform sampler2D uBlurTexture;
+
 out vec4 fragColor;
 
 void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
-    float falloff = 0.35 + 0.65 * pow(uv.y, 1.35);
-    float warpX =
-        sin(uv.y * 8.5 + uv.x * 5.5) * 0.030 +
-        sin(uv.y * 15.0 - uv.x * 3.5) * 0.018 +
-        sin(uv.y * 28.0 + uv.x * 1.8) * 0.010;
-    float warpY =
-        sin(uv.x * 9.0 + uv.y * 4.5) * 0.010 +
-        sin(uv.x * 18.0 - uv.y * 2.0) * 0.006;
 
-    vec2 warped = uv;
-    warped.x += warpX * falloff * uIntensity;
-    warped.y += warpY * falloff * uIntensity;
-    warped = clamp(warped, 0.0, 1.0);
+    float weight = 0.32 + 0.68 * pow(uv.y, 1.25);
+    float wave1 = sin(uv.y * 6.0 + uv.x * 3.0);
+    float wave2 = sin(uv.y * 10.5 - uv.x * 1.8);
+    float wave3 = sin(uv.y * 16.0 + uv.x * 0.6);
 
-    vec3 color = texture(uTexture, warped).rgb;
-    float sheen = smoothstep(0.0, 1.0, falloff) * 0.04;
-    color += sheen * uIntensity;
+    vec2 refractedUv = clamp(
+        uv + vec2(
+            (wave1 * 0.022 + wave2 * 0.012 + wave3 * 0.006) * weight * uIntensity,
+            (wave2 * 0.004 + wave3 * 0.002) * weight * uIntensity
+        ),
+        0.0,
+        1.0
+    );
+
+    vec3 base = texture(uSourceTexture, uv).rgb;
+    vec3 glass = texture(uBlurTexture, refractedUv).rgb;
+    vec3 color = mix(base, glass, (0.16 + 0.22 * weight) * uIntensity);
+    color += 0.035 * weight * uIntensity;
 
     fragColor = vec4(color, 1.0);
 }

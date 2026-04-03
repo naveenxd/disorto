@@ -5,36 +5,37 @@ precision highp float;
 uniform float uWidth;
 uniform float uHeight;
 uniform float uIntensity;
-uniform sampler2D uTexture;
+uniform sampler2D uSourceTexture;
+uniform sampler2D uBlurTexture;
+
 out vec4 fragColor;
 
 void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
-    float cellsX = 6.8;
+    float cellsX = 6.0;
     float cellsY = cellsX * (uHeight / uWidth);
     vec2 grid = vec2(cellsX, cellsY);
-    vec2 cellUv = fract(uv * grid) - 0.5;
-    vec2 cellId = floor(uv * grid);
+    vec2 gv = fract(uv * grid) - 0.5;
 
-    float radius = length(max(abs(cellUv) - vec2(0.28), 0.0));
-    float tileMask = 1.0 - smoothstep(0.06, 0.12, radius);
-    float bulge = (0.19 - dot(cellUv, cellUv)) * tileMask;
-    vec2 offset = cellUv * bulge * 0.95 * uIntensity;
+    vec2 rounded = abs(gv) - vec2(0.26);
+    float radius = length(max(rounded, 0.0));
+    float tile = 1.0 - smoothstep(0.04, 0.11, radius);
 
-    vec2 finalUv = clamp(uv + offset / grid, 0.0, 1.0);
-    vec3 color = texture(uTexture, finalUv).rgb;
+    vec2 refractedUv = clamp(
+        uv + (gv * 0.010 * tile) / grid * uIntensity,
+        0.0,
+        1.0
+    );
 
-    float edgeX = 1.0 - smoothstep(0.34, 0.48, abs(cellUv.x));
-    float edgeY = 1.0 - smoothstep(0.34, 0.48, abs(cellUv.y));
-    float seam = max(edgeX, edgeY);
-    float highlight = smoothstep(-0.50, 0.10, -(cellUv.x + cellUv.y)) * seam;
-    float shadow = smoothstep(-0.10, 0.55, cellUv.x + cellUv.y) * seam;
+    vec3 base = texture(uSourceTexture, uv).rgb;
+    vec3 glass = texture(uBlurTexture, refractedUv).rgb;
+    vec3 color = mix(base, glass, tile * 0.16 * uIntensity);
 
-    color += highlight * 0.10 * uIntensity;
-    color *= 1.0 - shadow * 0.22 * uIntensity;
-
-    float centerGlint = pow(max(0.0, 1.0 - length(cellUv) * 2.1), 5.0);
-    color += centerGlint * 0.05 * uIntensity;
+    float seamX = 1.0 - smoothstep(0.35, 0.48, abs(gv.x));
+    float seamY = 1.0 - smoothstep(0.35, 0.48, abs(gv.y));
+    float seam = max(seamX, seamY);
+    color += seam * 0.05 * uIntensity;
+    color *= 1.0 - seam * 0.08 * uIntensity;
 
     fragColor = vec4(color, 1.0);
 }

@@ -1,15 +1,10 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 
-// ════════════════════════════════════════════════════════════════════════════
-// DistortionEffect enum
-// ════════════════════════════════════════════════════════════════════════════
-
-/// Enumerates every distortion effect the app can apply.
 enum DistortionEffect {
   original,
   narrowReed,
@@ -20,36 +15,28 @@ enum DistortionEffect {
   ripple,
 }
 
-/// Convenience extension providing display labels and asset paths.
 extension DistortionEffectX on DistortionEffect {
   String get label => switch (this) {
-        DistortionEffect.original   => 'Original',
-        DistortionEffect.narrowReed => 'Narrow Reed',
-        DistortionEffect.wideReed   => 'Wide Reed',
-        DistortionEffect.lumina     => 'Lumina',
-        DistortionEffect.grid       => 'Grid',
-        DistortionEffect.liquid     => 'Liquid',
-        DistortionEffect.ripple     => 'Ripple',
-      };
+    DistortionEffect.original => 'Original',
+    DistortionEffect.narrowReed => 'Narrow Reed',
+    DistortionEffect.wideReed => 'Wide Reed',
+    DistortionEffect.lumina => 'Lumina',
+    DistortionEffect.grid => 'Grid',
+    DistortionEffect.liquid => 'Liquid',
+    DistortionEffect.ripple => 'Ripple',
+  };
 
-  /// Shader asset path registered in pubspec.yaml, or null for [original].
   String? get shaderAsset => switch (this) {
-        DistortionEffect.original   => null,
-        DistortionEffect.narrowReed => 'effects/shaders/narrow_reed.glsl',
-        DistortionEffect.wideReed   => 'effects/shaders/wide_reed.glsl',
-        DistortionEffect.lumina     => 'effects/shaders/lumina.glsl',
-        DistortionEffect.grid       => 'effects/shaders/grid.glsl',
-        DistortionEffect.liquid     => 'effects/shaders/liquid.glsl',
-        DistortionEffect.ripple     => 'effects/shaders/ripple.glsl',
-      };
+    DistortionEffect.original => null,
+    DistortionEffect.narrowReed => 'effects/shaders/narrow_reed.glsl',
+    DistortionEffect.wideReed => 'effects/shaders/wide_reed.glsl',
+    DistortionEffect.lumina => 'effects/shaders/lumina.glsl',
+    DistortionEffect.grid => 'effects/shaders/grid.glsl',
+    DistortionEffect.liquid => 'effects/shaders/liquid.glsl',
+    DistortionEffect.ripple => 'effects/shaders/ripple.glsl',
+  };
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// _BlurParams — isolate-safe payload for compute()
-// ════════════════════════════════════════════════════════════════════════════
-
-/// Plain-data transfer object passed into the blur isolate.
-/// Everything must be sendable across isolate boundaries (no ui.Image).
 class _BlurParams {
   const _BlurParams({
     required this.bytes,
@@ -60,18 +47,39 @@ class _BlurParams {
     required this.radius,
   });
 
-  final Uint8List bytes;  // Raw RGBA bytes of the image to blur
+  final Uint8List bytes;
   final int width;
   final int height;
   final int scaledWidth;
   final int scaledHeight;
-  final int radius;       // Gaussian blur radius in pixels
+  final int radius;
 }
 
-/// Top-level function executed by [compute] in a background isolate.
-/// Returns the blurred image as raw RGBA [Uint8List].
+class _RenderParams {
+  const _RenderParams({
+    required this.sourceBytes,
+    required this.blurBytes,
+    required this.width,
+    required this.height,
+    required this.effectIndex,
+    required this.intensity,
+    required this.mapWidth,
+    required this.mapHeight,
+    required this.mapData,
+  });
+
+  final Uint8List sourceBytes;
+  final Uint8List blurBytes;
+  final int width;
+  final int height;
+  final int effectIndex;
+  final double intensity;
+  final int mapWidth;
+  final int mapHeight;
+  final Float32List mapData;
+}
+
 Uint8List _blurIsolate(_BlurParams p) {
-  // Decode raw RGBA bytes into an img.Image.
   img.Image working = img.Image.fromBytes(
     width: p.width,
     height: p.height,
@@ -80,7 +88,6 @@ Uint8List _blurIsolate(_BlurParams p) {
     order: img.ChannelOrder.rgba,
   );
 
-  // Downsample before blurring for a softer glass-like result and better speed.
   if (p.scaledWidth != p.width || p.scaledHeight != p.height) {
     working = img.copyResize(
       working,
@@ -92,7 +99,6 @@ Uint8List _blurIsolate(_BlurParams p) {
 
   working = img.gaussianBlur(working, radius: p.radius);
 
-  // Re-expand to the original resolution after blur.
   if (working.width != p.width || working.height != p.height) {
     working = img.copyResize(
       working,
@@ -102,171 +108,369 @@ Uint8List _blurIsolate(_BlurParams p) {
     );
   }
 
-  // Return as raw RGBA bytes.
   return working.toUint8List();
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// EffectRenderer
-// ════════════════════════════════════════════════════════════════════════════
+double _clamp01(double value) => value < 0 ? 0 : (value > 1 ? 1 : value);
 
-/// Applies distortion shaders and optional Gaussian blur to a [ui.Image].
-///
-/// ### Usage
-/// ```dart
-/// final renderer = EffectRenderer();
-/// await renderer.init();                         // pre-warm shader cache
-///
-/// final result = await renderer.render(
-///   source:    myUiImage,
-///   effect:    DistortionEffect.narrowReed,
-///   intensity: 0.8,
-///   blurLevel: 2,        // 0 = no blur, 4 = heavy blur (radius 16)
-/// );
-/// ```
-///
-/// ### Pipeline
-/// ```
-/// source ui.Image
-///     ↓  [shader]   → rendered ui.Image    (on main thread via Canvas)
-///     ↓  [convert]  → img.Image / Uint8List
-///     ↓  [blur]     → blurred Uint8List     (on background isolate)
-///     ↓  [convert]  → ui.Image
-///     ↓  returned
-/// ```
-///
-/// Both the effect and blur are independently controlled:
-/// - [DistortionEffect.original] with `blurLevel > 0` = pure blur, no distortion.
-/// - Any effect with `blurLevel == 0` = distortion only, no blur.
-class EffectRenderer {
-  // Cache of pre-loaded FragmentPrograms keyed by shader asset path.
-  final Map<String, ui.FragmentProgram> _programCache = {};
+double _smoothstep(double edge0, double edge1, double x) {
+  final t = _clamp01((x - edge0) / (edge1 - edge0));
+  return t * t * (3 - 2 * t);
+}
 
-  // ── Lifecycle ─────────────────────────────────────────────────────────────
+double _mix(double a, double b, double t) => a + (b - a) * t;
 
-  /// Pre-loads all shader programs so the first render call is lag-free.
-  /// Call once at app start (e.g. in a FutureBuilder or initState).
-  Future<void> init() async {
-    for (final effect in DistortionEffect.values) {
-      final asset = effect.shaderAsset;
-      if (asset != null && !_programCache.containsKey(asset)) {
-        _programCache[asset] = await ui.FragmentProgram.fromAsset(asset);
-      }
+double _tri(double x) {
+  final f = x - x.floorToDouble();
+  return 1.0 - (f - 0.5).abs() * 2.0;
+}
+
+class _EffectMap {
+  const _EffectMap({
+    required this.width,
+    required this.height,
+    required this.data,
+  });
+
+  final int width;
+  final int height;
+  final Float32List data;
+}
+
+_EffectMap _generateEffectMap(DistortionEffect effect) {
+  const width = 256;
+  const height = 512;
+  final data = Float32List(width * height * 5);
+
+  double idx(int x, int y, int channel) =>
+      ((y * width + x) * 5 + channel).toDouble();
+
+  for (var y = 0; y < height; y++) {
+    final v = y / (height - 1);
+    for (var x = 0; x < width; x++) {
+      final u = x / (width - 1);
+      final sample = _generateEffectSample(effect, u, v);
+      data[idx(x, y, 0).toInt()] = sample.dx.toDouble();
+      data[idx(x, y, 1).toInt()] = sample.dy.toDouble();
+      data[idx(x, y, 2).toInt()] = sample.overlay.toDouble();
+      data[idx(x, y, 3).toInt()] = sample.highlight.toDouble();
+      data[idx(x, y, 4).toInt()] = sample.shadow.toDouble();
     }
   }
 
-  // ── Public API ────────────────────────────────────────────────────────────
+  return _EffectMap(width: width, height: height, data: data);
+}
 
-  /// Renders [source] with [effect] at the given [intensity], then applies
-  /// Gaussian blur at [blurLevel] steps (0 = none, 4 = heaviest).
-  ///
-  /// Always processes at the full resolution of [source].
-  /// Blur is applied to the base image first, then the selected shader distorts
-  /// that blurred image. This matches the app's reference behavior.
-  ///
-  /// Returns a new [ui.Image] that the caller owns and must [dispose].
+({double dx, double dy, double overlay, double highlight, double shadow})
+_generateEffectSample(DistortionEffect effect, double u, double v) {
+  switch (effect) {
+    case DistortionEffect.original:
+      return (dx: 0, dy: 0, overlay: 0, highlight: 0, shadow: 0);
+    case DistortionEffect.narrowReed:
+      final count = 34.0;
+      final bar = (u * count) % 1.0;
+      final normal = (bar - 0.5) * 2.0;
+      final center = (1.0 - normal.abs()).clamp(0.0, 1.0);
+      final mask = math.pow(center, 2.2).toDouble();
+      final seam = 1.0 - _smoothstep(0.42, 0.50, normal.abs());
+      final micro = (_tri(v * 42.0 + (u * count).floorToDouble() * 0.13) - 0.5);
+      return (
+        dx: normal * normal.abs() * 0.040 + micro * mask * 0.004,
+        dy: micro * mask * 0.0015,
+        overlay: 0.28 + 0.30 * mask,
+        highlight: 0.070 * mask,
+        shadow: 0.10 * seam,
+      );
+    case DistortionEffect.wideReed:
+      final count = 15.0;
+      final bar = (u * count) % 1.0;
+      final normal = (bar - 0.5) * 2.0;
+      final center = (1.0 - normal.abs()).clamp(0.0, 1.0);
+      final mask = math.pow(center, 1.7).toDouble();
+      final strip = (u * count).floorToDouble();
+      final seam = 1.0 - _smoothstep(0.38, 0.50, normal.abs());
+      final yOffset = math.sin(strip * 0.8 + v * 2.5) * 0.006;
+      return (
+        dx: normal * normal.abs() * 0.060,
+        dy: yOffset * mask,
+        overlay: 0.32 + 0.34 * mask,
+        highlight: 0.090 * mask,
+        shadow: 0.12 * seam,
+      );
+    case DistortionEffect.lumina:
+      final count = 9.0;
+      final bar = (u * count) % 1.0;
+      final normal = (bar - 0.5) * 2.0;
+      final center = (1.0 - normal.abs()).clamp(0.0, 1.0);
+      final mask = math.pow(center, 3.6).toDouble();
+      final rise = math.pow(v, 1.8).toDouble();
+      return (
+        dx: math.sin(v * 8.0 + u * 4.0) * mask * 0.003,
+        dy: -mask * rise * 0.030,
+        overlay: 0.12 + 0.12 * mask * rise,
+        highlight: 0.045 * mask,
+        shadow: 0,
+      );
+    case DistortionEffect.grid:
+      const cellsX = 6.2;
+      const cellsY = 6.2 * (512.0 / 256.0);
+      final gx = (u * cellsX) % 1.0 - 0.5;
+      final gy = (v * cellsY) % 1.0 - 0.5;
+      final qx = gx.abs() - 0.24;
+      final qy = gy.abs() - 0.24;
+      final radius = math.sqrt(
+        (qx > 0 ? qx : 0) * (qx > 0 ? qx : 0) +
+            (qy > 0 ? qy : 0) * (qy > 0 ? qy : 0),
+      );
+      final tile = 1.0 - _smoothstep(0.03, 0.12, radius);
+      final seamX = 1.0 - _smoothstep(0.35, 0.48, gx.abs());
+      final seamY = 1.0 - _smoothstep(0.35, 0.48, gy.abs());
+      final seam = seamX > seamY ? seamX : seamY;
+      final bulge = (0.22 - (gx * gx + gy * gy)).clamp(0.0, 0.22) / 0.22;
+      return (
+        dx: gx * 0.032 * tile,
+        dy: gy * 0.032 * tile,
+        overlay: 0.24 * tile + 0.10 * bulge,
+        highlight: 0.070 * seam + 0.025 * bulge,
+        shadow: 0.11 * seam,
+      );
+    case DistortionEffect.liquid:
+      final weight = 0.30 + 0.70 * math.pow(v, 1.35).toDouble();
+      final wave1 = math.sin(v * 5.5 + u * 2.5);
+      final wave2 = math.sin(v * 9.2 - u * 1.2);
+      final wave3 = math.sin(v * 14.8 + u * 0.8);
+      final wave4 = math.sin(v * 23.0 + u * 4.0) * 0.35;
+      return (
+        dx:
+            (wave1 * 0.080 + wave2 * 0.040 + wave3 * 0.018 + wave4 * 0.012) *
+            weight,
+        dy: (wave2 * 0.018 + wave3 * 0.008) * weight,
+        overlay: 0.36 + 0.30 * weight,
+        highlight: 0.070 * weight,
+        shadow: 0,
+      );
+    case DistortionEffect.ripple:
+      final cx = 0.5;
+      final cy = 0.57;
+      const aspect = 256.0 / 512.0;
+      var dx = (u - cx) * aspect;
+      var dy = v - cy;
+      final dist = math.sqrt(dx * dx + dy * dy);
+      final lens = 1.0 - _smoothstep(0.0, 0.42, dist);
+      final ring =
+          math.sin(dist * 26.0) * (1.0 - _smoothstep(0.06, 0.52, dist));
+      final radius = dist * (1.0 - lens * 0.58) + ring * 0.028;
+      final angle = math.atan2(dy, dx);
+      dx = math.cos(angle) * radius / aspect - (u - cx);
+      dy = math.sin(angle) * radius - (v - cy);
+      return (
+        dx: dx,
+        dy: dy,
+        overlay: 0.80 * lens,
+        highlight: 0.12 * lens,
+        shadow: 0,
+      );
+  }
+}
+
+({double dx, double dy, double overlay, double highlight, double shadow})
+_sampleEffectMap(Float32List data, int width, int height, double u, double v) {
+  final x = _clamp01(u) * (width - 1);
+  final y = _clamp01(v) * (height - 1);
+  final x0 = x.floor().clamp(0, width - 1);
+  final y0 = y.floor().clamp(0, height - 1);
+  final x1 = (x0 + 1).clamp(0, width - 1);
+  final y1 = (y0 + 1).clamp(0, height - 1);
+  final tx = x - x0;
+  final ty = y - y0;
+
+  double read(int px, int py, int channel) =>
+      data[(py * width + px) * 5 + channel];
+
+  double lerpChannel(int channel) {
+    final c00 = read(x0, y0, channel);
+    final c10 = read(x1, y0, channel);
+    final c01 = read(x0, y1, channel);
+    final c11 = read(x1, y1, channel);
+    final a = _mix(c00, c10, tx);
+    final b = _mix(c01, c11, tx);
+    return _mix(a, b, ty);
+  }
+
+  return (
+    dx: lerpChannel(0),
+    dy: lerpChannel(1),
+    overlay: lerpChannel(2),
+    highlight: lerpChannel(3),
+    shadow: lerpChannel(4),
+  );
+}
+
+Uint8List _renderEffectIsolate(_RenderParams p) {
+  final source = p.sourceBytes;
+  final blur = p.blurBytes;
+  final output = Uint8List(source.length);
+  for (var y = 0; y < p.height; y++) {
+    final v = y / (p.height - 1);
+    for (var x = 0; x < p.width; x++) {
+      final u = x / (p.width - 1);
+      final profile = _sampleEffectMap(
+        p.mapData,
+        p.mapWidth,
+        p.mapHeight,
+        u,
+        v,
+      );
+      final sx = _clamp01(u + profile.dx * p.intensity) * (p.width - 1);
+      final sy = _clamp01(v + profile.dy * p.intensity) * (p.height - 1);
+      final index = (y * p.width + x) * 4;
+      final glass = _sampleBilinearBytes(blur, p.width, p.height, sx, sy);
+      final overlay = _clamp01(profile.overlay * p.intensity);
+
+      final r = _clamp01(
+        _mix(source[index] / 255.0, glass.r, overlay) +
+            profile.highlight * p.intensity -
+            profile.shadow * p.intensity,
+      );
+      final g = _clamp01(
+        _mix(source[index + 1] / 255.0, glass.g, overlay) +
+            profile.highlight * p.intensity -
+            profile.shadow * p.intensity,
+      );
+      final b = _clamp01(
+        _mix(source[index + 2] / 255.0, glass.b, overlay) +
+            profile.highlight * p.intensity -
+            profile.shadow * p.intensity,
+      );
+
+      output[index] = (r * 255).round().clamp(0, 255);
+      output[index + 1] = (g * 255).round().clamp(0, 255);
+      output[index + 2] = (b * 255).round().clamp(0, 255);
+      output[index + 3] = source[index + 3];
+    }
+  }
+
+  return output;
+}
+
+({double r, double g, double b}) _sampleBilinearBytes(
+  Uint8List bytes,
+  int width,
+  int height,
+  double x,
+  double y,
+) {
+  final x0 = x.floor().clamp(0, width - 1);
+  final y0 = y.floor().clamp(0, height - 1);
+  final x1 = (x0 + 1).clamp(0, width - 1);
+  final y1 = (y0 + 1).clamp(0, height - 1);
+  final tx = x - x0;
+  final ty = y - y0;
+
+  final c00 = _readRgb(bytes, width, x0, y0);
+  final c10 = _readRgb(bytes, width, x1, y0);
+  final c01 = _readRgb(bytes, width, x0, y1);
+  final c11 = _readRgb(bytes, width, x1, y1);
+
+  final r0 = _mix(c00.r, c10.r, tx);
+  final g0 = _mix(c00.g, c10.g, tx);
+  final b0 = _mix(c00.b, c10.b, tx);
+  final r1 = _mix(c01.r, c11.r, tx);
+  final g1 = _mix(c01.g, c11.g, tx);
+  final b1 = _mix(c01.b, c11.b, tx);
+
+  return (r: _mix(r0, r1, ty), g: _mix(g0, g1, ty), b: _mix(b0, b1, ty));
+}
+
+({double r, double g, double b}) _readRgb(
+  Uint8List bytes,
+  int width,
+  int x,
+  int y,
+) {
+  final index = (y * width + x) * 4;
+  return (
+    r: bytes[index] / 255.0,
+    g: bytes[index + 1] / 255.0,
+    b: bytes[index + 2] / 255.0,
+  );
+}
+
+class EffectRenderer {
+  final Map<DistortionEffect, _EffectMap> _effectMaps = {};
+
+  Future<void> init() async {}
+
   Future<ui.Image> render({
     required ui.Image source,
+    ui.Image? blurredBase,
     required DistortionEffect effect,
     double intensity = 1.0,
-    int blurLevel = 0,
   }) async {
-    assert(intensity >= 0.0 && intensity <= 1.0,
-        'intensity must be in [0.0, 1.0]');
-    assert(blurLevel >= 0 && blurLevel <= 4,
-        'blurLevel must be in [0, 4]');
-
-    ui.Image working = source;
-
-    // Step 1: Blur the base image first so the effect refracts the blurred
-    // content instead of blurring the already-distorted output.
-    if (blurLevel > 0) {
-      working = await _applyBlur(image: source, blurLevel: blurLevel);
-    }
-
-    // Step 2: Apply shader distortion (or pass through for original).
-    final distorted = await _applyShader(
-      source: working,
-      effect: effect,
-      intensity: intensity,
+    assert(
+      intensity >= 0.0 && intensity <= 1.0,
+      'intensity must be in [0.0, 1.0]',
     );
 
-    if (blurLevel > 0) {
-      working.dispose();
-    }
-
-    return distorted;
-  }
-
-  // ── Shader rendering ──────────────────────────────────────────────────────
-
-  /// Renders [source] through the GLSL shader for [effect].
-  /// For [DistortionEffect.original], returns a copy of [source] (no shader).
-  Future<ui.Image> _applyShader({
-    required ui.Image source,
-    required DistortionEffect effect,
-    required double intensity,
-  }) async {
-    final double w = source.width.toDouble();
-    final double h = source.height.toDouble();
-
-    // Record drawing commands into a Picture.
-    final recorder = ui.PictureRecorder();
-    final canvas   = Canvas(recorder, Rect.fromLTWH(0, 0, w, h));
-
-    if (effect == DistortionEffect.original) {
-      // Draw the source image unchanged.
-      canvas.drawImage(source, Offset.zero, Paint());
-    } else {
-      final asset = effect.shaderAsset!;
-
-      // Load (or reuse) the FragmentProgram.
-      final program = _programCache[asset] ??
-          await _loadAndCache(asset);
-
-      final shader = program.fragmentShader();
-
-      // Uniform binding order (context spec §"Shader uniform layout"):
-      //   index 0 → uWidth     (float)
-      //   index 1 → uHeight    (float)
-      //   index 2 → uIntensity (float)
-      //   sampler 0 → uTexture
-      shader.setFloat(0, w);
-      shader.setFloat(1, h);
-      shader.setFloat(2, intensity);
-      shader.setImageSampler(0, source);
-
-      canvas.drawRect(
-        Rect.fromLTWH(0, 0, w, h),
-        Paint()..shader = shader,
+    try {
+      final baseData = await source.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
       );
+      if (baseData == null) {
+        return _copyImage(source);
+      }
+
+      final blurImage = blurredBase ?? source;
+      final blurData = await blurImage.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
+      );
+      if (blurData == null) {
+        return _copyImage(source);
+      }
+
+      if (effect == DistortionEffect.original) {
+        return _decodeRgba(
+          blurData.buffer.asUint8List(),
+          source.width,
+          source.height,
+        );
+      }
+
+      final bytes = await compute(
+        _renderEffectIsolate,
+        _RenderParams(
+          sourceBytes: baseData.buffer.asUint8List(),
+          blurBytes: blurData.buffer.asUint8List(),
+          width: source.width,
+          height: source.height,
+          effectIndex: effect.index,
+          intensity: intensity,
+          mapWidth: _effectMapFor(effect).width,
+          mapHeight: _effectMapFor(effect).height,
+          mapData: _effectMapFor(effect).data,
+        ),
+      );
+
+      return _decodeRgba(bytes, source.width, source.height);
+    } catch (_) {
+      return _copyImage(blurredBase ?? source);
     }
-
-    // Rasterise the picture into a ui.Image at the original resolution.
-    final picture = recorder.endRecording();
-    final rendered = await picture.toImage(w.toInt(), h.toInt());
-    picture.dispose();
-    return rendered;
   }
 
-  Future<ui.FragmentProgram> _loadAndCache(String asset) async {
-    final program = await ui.FragmentProgram.fromAsset(asset);
-    _programCache[asset] = program;
-    return program;
+  Future<ui.Image> prepareBlurredBase({
+    required ui.Image source,
+    required int blurLevel,
+  }) async {
+    if (blurLevel <= 0) {
+      return _copyImage(source);
+    }
+    return _applyBlur(image: source, blurLevel: blurLevel);
   }
 
-  // ── Gaussian blur (background isolate) ───────────────────────────────────
-
-  /// Applies Gaussian blur to [image] using the `image` package on a
-  /// background isolate via [compute], keeping the main thread unblocked.
-  ///
-  /// The blur is downsampled before processing to avoid the harsh, smeared
-  /// look produced by full-resolution post-effect blurring.
   Future<ui.Image> _applyBlur({
     required ui.Image image,
     required int blurLevel,
   }) async {
-    // Convert ui.Image → raw RGBA bytes (on main thread — must be here).
     final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
     if (byteData == null) {
       return _copyImage(image);
@@ -284,62 +488,69 @@ class EffectRenderer {
       3 => 12,
       _ => 16,
     };
-    final scaledWidth = (image.width * scale).round().clamp(1, image.width);
-    final scaledHeight =
-        (image.height * scale).round().clamp(1, image.height);
 
-    final params = _BlurParams(
-      bytes: byteData.buffer.asUint8List(),
-      width: image.width,
-      height: image.height,
-      scaledWidth: scaledWidth,
-      scaledHeight: scaledHeight,
-      radius: radius,
+    final bytes = await compute(
+      _blurIsolate,
+      _BlurParams(
+        bytes: byteData.buffer.asUint8List(),
+        width: image.width,
+        height: image.height,
+        scaledWidth: (image.width * scale).round().clamp(1, image.width),
+        scaledHeight: (image.height * scale).round().clamp(1, image.height),
+        radius: radius,
+      ),
     );
 
-    // Run the blur on a background isolate — never blocks the UI thread.
-    final blurredBytes = await compute(_blurIsolate, params);
+    return _decodeRgba(bytes, image.width, image.height);
+  }
 
-    // Convert blurred RGBA bytes back to ui.Image.
+  Future<ui.Image> _copyImage(ui.Image source) async {
+    final byteData = await source.toByteData(
+      format: ui.ImageByteFormat.rawRgba,
+    );
+    if (byteData == null) {
+      final recorder = ui.PictureRecorder();
+      final canvas = ui.Canvas(
+        recorder,
+        ui.Rect.fromLTWH(
+          0,
+          0,
+          source.width.toDouble(),
+          source.height.toDouble(),
+        ),
+      );
+      canvas.drawImage(source, ui.Offset.zero, ui.Paint());
+      final picture = recorder.endRecording();
+      final copy = await picture.toImage(source.width, source.height);
+      picture.dispose();
+      return copy;
+    }
+    return _decodeRgba(
+      byteData.buffer.asUint8List(),
+      source.width,
+      source.height,
+    );
+  }
+
+  Future<ui.Image> _decodeRgba(Uint8List bytes, int width, int height) {
     final completer = Completer<ui.Image>();
     ui.decodeImageFromPixels(
-      blurredBytes,
-      image.width,
-      image.height,
+      bytes,
+      width,
+      height,
       ui.PixelFormat.rgba8888,
       (result) => completer.complete(result),
     );
     return completer.future;
   }
 
-  Future<ui.Image> _copyImage(ui.Image source) async {
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(
-      recorder,
-      Rect.fromLTWH(0, 0, source.width.toDouble(), source.height.toDouble()),
-    );
-    canvas.drawImage(source, Offset.zero, Paint());
-    final picture = recorder.endRecording();
-    final copy = await picture.toImage(source.width, source.height);
-    picture.dispose();
-    return copy;
-  }
+  void dispose() {}
 
-  // ── Dispose ───────────────────────────────────────────────────────────────
-
-  /// Clears the shader program cache. Call when the renderer is no longer
-  /// needed (e.g. in widget dispose).
-  void dispose() {
-    _programCache.clear();
+  _EffectMap _effectMapFor(DistortionEffect effect) {
+    return _effectMaps.putIfAbsent(effect, () => _generateEffectMap(effect));
   }
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// RenderedResult — convenience wrapper returned from render()
-// ════════════════════════════════════════════════════════════════════════════
-
-/// Wraps the output of [EffectRenderer.render] together with the parameters
-/// used to produce it, so callers can skip re-rendering when nothing changed.
 class RenderedResult {
   RenderedResult({
     required this.image,
@@ -353,8 +564,6 @@ class RenderedResult {
   final double intensity;
   final int blurLevel;
 
-  /// True if re-rendering with [newEffect], [newIntensity], [newBlurLevel]
-  /// would produce the same result as this one.
   bool isCurrent({
     required DistortionEffect newEffect,
     required double newIntensity,
@@ -365,4 +574,50 @@ class RenderedResult {
       newBlurLevel == blurLevel;
 
   void dispose() => image.dispose();
+}
+
+class ShaderProgramCache {
+  final Map<String, Future<ui.FragmentProgram>> _pending = {};
+  final Map<String, ui.FragmentProgram> _ready = {};
+
+  Future<void> init() async {
+    await Future.wait(
+      DistortionEffect.values
+          .where((effect) => effect.shaderAsset != null)
+          .map((effect) => loadProgram(effect)),
+    );
+  }
+
+  Future<ui.FragmentProgram?> loadProgram(DistortionEffect effect) async {
+    final asset = effect.shaderAsset;
+    if (asset == null) {
+      return null;
+    }
+    final cached = _ready[asset];
+    if (cached != null) {
+      return cached;
+    }
+
+    final pending = _pending.putIfAbsent(
+      asset,
+      () => ui.FragmentProgram.fromAsset(asset),
+    );
+    final program = await pending;
+    _ready[asset] = program;
+    _pending.remove(asset);
+    return program;
+  }
+
+  ui.FragmentProgram? getCachedProgram(DistortionEffect effect) {
+    final asset = effect.shaderAsset;
+    if (asset == null) {
+      return null;
+    }
+    return _ready[asset];
+  }
+
+  void dispose() {
+    _pending.clear();
+    _ready.clear();
+  }
 }

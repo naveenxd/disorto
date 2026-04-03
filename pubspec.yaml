@@ -18,6 +18,8 @@ dependencies:
   wallpaper_manager_plus: ^2.0.3
   image: ^4.2.0
   path_provider: ^2.1.0
+  flutter_shaders: ^0.1.3
+  flutter_shader_kit: ^0.1.1
 
 dev_dependencies:
   flutter_test:
@@ -36,4 +38,3 @@ flutter:
     - effects/shaders/grid.glsl
     - effects/shaders/liquid.glsl
     - effects/shaders/ripple.glsl
-

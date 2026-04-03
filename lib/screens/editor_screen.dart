@@ -21,30 +21,36 @@ class EditorScreen extends StatefulWidget {
   State<EditorScreen> createState() => _EditorScreenState();
 }
 
-class _EditorScreenState extends State<EditorScreen> {
+class _EditorScreenState extends State<EditorScreen>
+    with SingleTickerProviderStateMixin {
   // ── Renderer ───────────────────────────────────────────────────────────────
   final EffectRenderer _renderer = EffectRenderer();
+  final ShaderProgramCache _shaderProgramCache = ShaderProgramCache();
 
   // ── Source image (full-res, never mutated) ─────────────────────────────────
   ui.Image? _sourceImage;
 
   // ── Processing state ───────────────────────────────────────────────────────
-  ui.Image? _previewImage;       // currently displayed result
-  bool      _rendering  = false; // debounce flag
-  bool      _initialising = true;
+  ui.Image? _previewBlurImage;
+  ui.FragmentShader? _previewShader;
+  bool _rendering = false;
+  bool _initialising = true;
 
   // ── Controls ───────────────────────────────────────────────────────────────
-  DistortionEffect _effect   = DistortionEffect.original;
-  int              _blurLevel = 0;           // 0-4
+  DistortionEffect _effect = DistortionEffect.original;
+  int _blurLevel = 0; // 0-4
 
   // ── Thumbnail cache ────────────────────────────────────────────────────────
   // Keyed by DistortionEffect; generated at load time from a downscaled source.
   final Map<DistortionEffect, ui.Image?> _thumbs = {};
   ui.Image? _thumbSource; // downscaled source for thumbnail rendering
+  final Map<int, ui.Image> _previewBlurBases = {};
+  final Map<int, ui.Image> _thumbBlurBases = {};
 
   // ── Saving state ──────────────────────────────────────────────────────────
-  bool _saving   = false;
+  bool _saving = false;
   bool _wallpapering = false;
+  late final AnimationController _timeController;
 
   // ─────────────────────────────────────────────────────────────────────────
   // Lifecycle
@@ -53,17 +59,28 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   void initState() {
     super.initState();
+    _timeController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 24),
+    )..repeat();
     _bootstrap();
   }
 
   @override
   void dispose() {
     _renderer.dispose();
+    _shaderProgramCache.dispose();
+    _timeController.dispose();
     _sourceImage?.dispose();
-    _previewImage?.dispose();
     _thumbSource?.dispose();
     for (final t in _thumbs.values) {
       t?.dispose();
+    }
+    for (final image in _previewBlurBases.values) {
+      image.dispose();
+    }
+    for (final image in _thumbBlurBases.values) {
+      image.dispose();
     }
     super.dispose();
   }
@@ -84,48 +101,46 @@ class _EditorScreenState extends State<EditorScreen> {
 
     // Pre-warm shaders.
     await _renderer.init();
+    await _shaderProgramCache.init();
 
     // Build a downscaled copy for thumbnail rendering (~200px wide).
     _thumbSource = await _downscale(_sourceImage!, targetWidth: 200);
+    _previewBlurBases[0] = await _renderer.prepareBlurredBase(
+      source: _sourceImage!,
+      blurLevel: 0,
+    );
+    _thumbBlurBases[0] = await _renderer.prepareBlurredBase(
+      source: _thumbSource!,
+      blurLevel: 0,
+    );
 
     // Kick off thumbnail generation for all effects (non-blocking fire-and-forget).
     _generateThumbnails();
+    _warmBlurCaches();
 
-    // Render the initial preview (original effect).
     await _rerender();
 
     if (mounted) setState(() => _initialising = false);
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Preview re-render (triggered on effect or blur change)
-  // ─────────────────────────────────────────────────────────────────────────
-
   Future<void> _rerender() async {
-    if (_sourceImage == null || _rendering) return;
-
-    // Commit _rendering=true to the framework NOW so the spinner shows
-    // while the shader + blur (compute isolate) work in the background.
+    if (_sourceImage == null) return;
     setState(() => _rendering = true);
-
-    final result = await _renderer.render(
-      source:    _sourceImage!,
-      effect:    _effect,
-      intensity: 1.0,
-      blurLevel: _blurLevel,
-    );
-
-    if (!mounted) {
-      result.dispose();
-      _rendering = false;
-      return;
+    try {
+      final blurredBase = await _getPreviewEffectBase(_effect, _blurLevel);
+      final program = await _shaderProgramCache.loadProgram(_effect);
+      final shader = program?.fragmentShader();
+      if (!mounted) return;
+      setState(() {
+        _previewBlurImage = blurredBase;
+        _previewShader = shader;
+        _rendering = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _rendering = false);
+      _showSnack('Effect render failed: $e');
     }
-
-    setState(() {
-      _previewImage?.dispose();
-      _previewImage = result;
-      _rendering = false;
-    });
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -136,11 +151,12 @@ class _EditorScreenState extends State<EditorScreen> {
     if (_thumbSource == null) return;
     for (final effect in DistortionEffect.values) {
       if (!mounted) return;
+      final blurredBase = await _getThumbEffectBase(effect, 0);
       final thumb = await _renderer.render(
-        source:    _thumbSource!,
-        effect:    effect,
+        source: _thumbSource!,
+        blurredBase: blurredBase,
+        effect: effect,
         intensity: 1.0,
-        blurLevel: 0,
       );
       if (mounted) {
         setState(() => _thumbs[effect] = thumb);
@@ -151,38 +167,100 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  Future<void> _warmBlurCaches() async {
+    if (_sourceImage == null || _thumbSource == null) return;
+    for (final level in [1, 2, 3, 4]) {
+      if (!mounted) return;
+      await _getPreviewBlurBase(level);
+      await _getThumbBlurBase(level);
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // Helpers
   // ─────────────────────────────────────────────────────────────────────────
 
   Future<ui.Image> _downscale(ui.Image src, {required int targetWidth}) async {
-    final scale  = targetWidth / src.width;
-    final tw     = targetWidth;
-    final th     = (src.height * scale).round();
+    final scale = targetWidth / src.width;
+    final tw = targetWidth;
+    final th = (src.height * scale).round();
 
     final recorder = ui.PictureRecorder();
-    final canvas   = Canvas(recorder);
+    final canvas = Canvas(recorder);
     canvas.scale(scale);
     canvas.drawImage(src, Offset.zero, Paint());
     final picture = recorder.endRecording();
-    final img     = await picture.toImage(tw, th);
+    final img = await picture.toImage(tw, th);
     picture.dispose();
     return img;
   }
 
   Future<String> _exportToTemp() async {
-    final dir      = await getTemporaryDirectory();
-    final outPath  = '${dir.path}/distorto_export_${DateTime.now().millisecondsSinceEpoch}.png';
+    final dir = await getTemporaryDirectory();
+    final outPath =
+        '${dir.path}/distorto_export_${DateTime.now().millisecondsSinceEpoch}.png';
+    final blurredBase = await _getPreviewEffectBase(_effect, _blurLevel);
     final rendered = await _renderer.render(
-      source:    _sourceImage!,
-      effect:    _effect,
+      source: _sourceImage!,
+      blurredBase: blurredBase,
+      effect: _effect,
       intensity: 1.0,
-      blurLevel: _blurLevel,
     );
     final byteData = await rendered.toByteData(format: ui.ImageByteFormat.png);
     rendered.dispose();
     await File(outPath).writeAsBytes(byteData!.buffer.asUint8List());
     return outPath;
+  }
+
+  Future<ui.Image> _getPreviewBlurBase(int level) async {
+    final cached = _previewBlurBases[level];
+    if (cached != null) return cached;
+
+    final image = await _renderer.prepareBlurredBase(
+      source: _sourceImage!,
+      blurLevel: level,
+    );
+    _previewBlurBases[level] = image;
+    return image;
+  }
+
+  Future<ui.Image> _getThumbBlurBase(int level) async {
+    final cached = _thumbBlurBases[level];
+    if (cached != null) return cached;
+
+    final image = await _renderer.prepareBlurredBase(
+      source: _thumbSource!,
+      blurLevel: level,
+    );
+    _thumbBlurBases[level] = image;
+    return image;
+  }
+
+  Future<ui.Image> _getPreviewEffectBase(
+    DistortionEffect effect,
+    int blurLevel,
+  ) async {
+    if (effect == DistortionEffect.original) {
+      return _getPreviewBlurBase(blurLevel);
+    }
+
+    // Non-original effects should still read as frosted glass even when the
+    // user blur slider is off, so keep a minimum internal blur for the glass
+    // layer and scale up from there.
+    final effectBlurLevel = blurLevel == 0 ? 1 : (blurLevel + 1).clamp(1, 4);
+    return _getPreviewBlurBase(effectBlurLevel);
+  }
+
+  Future<ui.Image> _getThumbEffectBase(
+    DistortionEffect effect,
+    int blurLevel,
+  ) async {
+    if (effect == DistortionEffect.original) {
+      return _getThumbBlurBase(blurLevel);
+    }
+
+    final effectBlurLevel = blurLevel == 0 ? 1 : (blurLevel + 1).clamp(1, 4);
+    return _getThumbBlurBase(effectBlurLevel);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -240,10 +318,7 @@ class _EditorScreenState extends State<EditorScreen> {
     setState(() => _wallpapering = true);
     try {
       final path = await _exportToTemp();
-      await WallpaperService.setWallpaper(
-        imagePath: path,
-        location: location,
-      );
+      await WallpaperService.setWallpaper(imagePath: path, location: location);
       if (mounted) _showSnack('Wallpaper set ✓');
     } on WallpaperException catch (e) {
       if (mounted) _showSnack(e.message);
@@ -281,7 +356,12 @@ class _EditorScreenState extends State<EditorScreen> {
           children: [
             // ── Full-screen image preview ────────────────────────────────
             _PreviewPane(
-              image: _previewImage,
+              sourceImage: _sourceImage,
+              blurImage: _previewBlurImage,
+              effect: _effect,
+              shader: _previewShader,
+              animation: _timeController,
+              timeSeconds: _timeController.value * 24.0,
               initialising: _initialising,
               rendering: _rendering,
             ),
@@ -291,9 +371,9 @@ class _EditorScreenState extends State<EditorScreen> {
               top: MediaQuery.of(context).padding.top + 8,
               right: 12,
               child: _TopActions(
-                saving:      _saving,
-                wallpapering:_wallpapering,
-                onSave:      _onSave,
+                saving: _saving,
+                wallpapering: _wallpapering,
+                onSave: _onSave,
                 onWallpaper: _onSetWallpaper,
               ),
             ),
@@ -303,8 +383,11 @@ class _EditorScreenState extends State<EditorScreen> {
               top: MediaQuery.of(context).padding.top + 8,
               left: 4,
               child: IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new_rounded,
-                    color: Colors.white, size: 20),
+                icon: const Icon(
+                  Icons.arrow_back_ios_new_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
                 onPressed: () => Navigator.maybePop(context),
               ),
             ),
@@ -315,10 +398,10 @@ class _EditorScreenState extends State<EditorScreen> {
               right: 0,
               bottom: 0,
               child: _BottomPanel(
-                blurLevel:       _blurLevel,
-                selectedEffect:  _effect,
-                thumbs:          _thumbs,
-                onBlurChanged:   _onBlurChanged,
+                blurLevel: _blurLevel,
+                selectedEffect: _effect,
+                thumbs: _thumbs,
+                onBlurChanged: _onBlurChanged,
                 onEffectSelected: _onEffectSelected,
               ),
             ),
@@ -334,12 +417,22 @@ class _EditorScreenState extends State<EditorScreen> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _PreviewPane extends StatelessWidget {
-  final ui.Image? image;
+  final ui.Image? sourceImage;
+  final ui.Image? blurImage;
+  final DistortionEffect effect;
+  final ui.FragmentShader? shader;
+  final Animation<double> animation;
+  final double timeSeconds;
   final bool initialising;
   final bool rendering;
 
   const _PreviewPane({
-    required this.image,
+    required this.sourceImage,
+    required this.blurImage,
+    required this.effect,
+    required this.shader,
+    required this.animation,
+    required this.timeSeconds,
     required this.initialising,
     required this.rendering,
   });
@@ -351,26 +444,122 @@ class _PreviewPane extends StatelessWidget {
         duration: const Duration(milliseconds: 280),
         child: initialising
             ? const _LoadingPlaceholder(key: ValueKey('loading'))
-            : image != null
-                ? _ImageDisplay(key: ValueKey(image.hashCode), image: image!)
-                : const _LoadingPlaceholder(key: ValueKey('blank')),
+            : sourceImage != null && blurImage != null
+            ? _ImageDisplay(
+                key: ValueKey(
+                  '${sourceImage.hashCode}-${blurImage.hashCode}-${effect.index}',
+                ),
+                sourceImage: sourceImage!,
+                blurImage: blurImage!,
+                effect: effect,
+                shader: shader,
+                animation: animation,
+                timeSeconds: timeSeconds,
+              )
+            : const _LoadingPlaceholder(key: ValueKey('blank')),
       ),
     );
   }
 }
 
 class _ImageDisplay extends StatelessWidget {
-  final ui.Image image;
-  const _ImageDisplay({super.key, required this.image});
+  final ui.Image sourceImage;
+  final ui.Image blurImage;
+  final DistortionEffect effect;
+  final ui.FragmentShader? shader;
+  final Animation<double> animation;
+  final double timeSeconds;
+
+  const _ImageDisplay({
+    super.key,
+    required this.sourceImage,
+    required this.blurImage,
+    required this.effect,
+    required this.shader,
+    required this.animation,
+    required this.timeSeconds,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return RawImage(
-      image: image,
-      fit: BoxFit.cover,
-      width: double.infinity,
-      height: double.infinity,
+    return SizedBox.expand(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: sourceImage.width.toDouble(),
+          height: sourceImage.height.toDouble(),
+          child: RepaintBoundary(
+            child: CustomPaint(
+              painter: _ShaderPreviewPainter(
+                sourceImage: sourceImage,
+                blurImage: blurImage,
+                effect: effect,
+                intensity: 1.0,
+                shader: shader,
+                repaint: animation,
+                timeSeconds: timeSeconds,
+              ),
+            ),
+          ),
+        ),
+      ),
     );
+  }
+}
+
+class _ShaderPreviewPainter extends CustomPainter {
+  const _ShaderPreviewPainter({
+    required this.sourceImage,
+    required this.blurImage,
+    required this.effect,
+    required this.intensity,
+    required this.shader,
+    required this.repaint,
+    required this.timeSeconds,
+  }) : super(repaint: repaint);
+
+  final ui.Image sourceImage;
+  final ui.Image blurImage;
+  final DistortionEffect effect;
+  final double intensity;
+  final ui.FragmentShader? shader;
+  final Listenable repaint;
+  final double timeSeconds;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final activeShader = shader;
+
+    if (effect == DistortionEffect.original || activeShader == null) {
+      paintImage(
+        canvas: canvas,
+        rect: rect,
+        image: blurImage,
+        fit: BoxFit.fill,
+      );
+      return;
+    }
+
+    activeShader
+      ..setFloat(0, size.width)
+      ..setFloat(1, size.height)
+      ..setFloat(2, intensity)
+      ..setFloat(3, timeSeconds)
+      ..setImageSampler(0, sourceImage)
+      ..setImageSampler(1, blurImage);
+
+    canvas.drawRect(rect, Paint()..shader = activeShader);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ShaderPreviewPainter oldDelegate) {
+    return oldDelegate.sourceImage != sourceImage ||
+        oldDelegate.blurImage != blurImage ||
+        oldDelegate.effect != effect ||
+        oldDelegate.intensity != intensity ||
+        oldDelegate.shader != shader ||
+        oldDelegate.timeSeconds != timeSeconds;
   }
 }
 
@@ -506,9 +695,7 @@ class _BottomPanel extends StatelessWidget {
       decoration: const BoxDecoration(
         color: Color(0xE6111111), // ~90% opaque
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        border: Border(
-          top: BorderSide(color: Color(0x22FFFFFF), width: 0.8),
-        ),
+        border: Border(top: BorderSide(color: Color(0x22FFFFFF), width: 0.8)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -526,10 +713,7 @@ class _BottomPanel extends StatelessWidget {
           const SizedBox(height: 18),
 
           // Blur section.
-          _BlurSection(
-            blurLevel: blurLevel,
-            onChanged: onBlurChanged,
-          ),
+          _BlurSection(blurLevel: blurLevel, onChanged: onBlurChanged),
 
           const SizedBox(height: 20),
 
@@ -578,10 +762,7 @@ class _BlurSection extends StatelessWidget {
               const Spacer(),
               Text(
                 blurLevel == 0 ? 'Off' : '$blurLevel',
-                style: const TextStyle(
-                  color: Color(0xFF888888),
-                  fontSize: 12,
-                ),
+                style: const TextStyle(color: Color(0xFF888888), fontSize: 12),
               ),
             ],
           ),
@@ -659,7 +840,7 @@ class _DotSlider extends StatelessWidget {
                                 BoxShadow(
                                   color: Colors.white.withAlpha(80),
                                   blurRadius: 8,
-                                )
+                                ),
                               ]
                             : null,
                       ),
@@ -760,7 +941,7 @@ class _EffectThumb extends StatelessWidget {
                         color: Colors.white.withAlpha(80),
                         blurRadius: 10,
                         spreadRadius: 1,
-                      )
+                      ),
                     ]
                   : null,
               color: const Color(0xFF1A1A1A),
@@ -792,8 +973,7 @@ class _EffectThumb extends StatelessWidget {
             style: TextStyle(
               color: selected ? Colors.white : const Color(0xFF888888),
               fontSize: 10,
-              fontWeight:
-                  selected ? FontWeight.w600 : FontWeight.w400,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
               letterSpacing: 0.2,
             ),
           ),
@@ -884,8 +1064,7 @@ class _WallpaperOption extends StatelessWidget {
         decoration: BoxDecoration(
           color: const Color(0xFF1A1A1A),
           borderRadius: BorderRadius.circular(14),
-          border:
-              Border.all(color: const Color(0xFF2A2A2A), width: 0.8),
+          border: Border.all(color: const Color(0xFF2A2A2A), width: 0.8),
         ),
         child: Row(
           children: [
@@ -900,8 +1079,11 @@ class _WallpaperOption extends StatelessWidget {
               ),
             ),
             const Spacer(),
-            const Icon(Icons.arrow_forward_ios_rounded,
-                color: Color(0xFF444444), size: 14),
+            const Icon(
+              Icons.arrow_forward_ios_rounded,
+              color: Color(0xFF444444),
+              size: 14,
+            ),
           ],
         ),
       ),
