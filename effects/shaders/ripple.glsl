@@ -6,6 +6,7 @@ uniform float uWidth;
 uniform float uHeight;
 uniform float uIntensity;
 uniform float uTime;
+uniform float uOriginalDetailWeight;
 uniform sampler2D uSourceTexture;
 uniform sampler2D uBlurTexture;
 
@@ -38,7 +39,7 @@ void main() {
 
     vec3 base = texture(uSourceTexture, uv).rgb;
     vec3 glass = texture(uBlurTexture, refractedUv).rgb;
-    vec3 color = mix(base, glass, clamp((0.30 + lens * 0.42) * uIntensity, 0.0, 0.72));
+    vec3 color = mix(glass, base, clamp(uOriginalDetailWeight, 0.0, 1.0));
     float edge = smoothstep(0.25, 0.0, dist);
     color += lens * 0.12 * uIntensity + edge * 0.06 * uIntensity;
     color *= 1.0 - edge * 0.06 * uIntensity;

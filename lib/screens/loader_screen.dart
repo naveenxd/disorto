@@ -8,7 +8,7 @@ import '../widgets/nothing_loading_overlay.dart';
 
 Route<void> buildLoaderRoute(File image) {
   return PageRouteBuilder<void>(
-    transitionDuration: const Duration(milliseconds: 200),
+    transitionDuration: Duration.zero,
     reverseTransitionDuration: const Duration(milliseconds: 200),
     pageBuilder: (context, animation, secondaryAnimation) =>
         LoaderScreen(image: image),

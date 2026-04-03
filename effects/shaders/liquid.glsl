@@ -6,6 +6,7 @@ uniform float uWidth;
 uniform float uHeight;
 uniform float uIntensity;
 uniform float uTime;
+uniform float uOriginalDetailWeight;
 uniform sampler2D uSourceTexture;
 uniform sampler2D uBlurTexture;
 
@@ -33,7 +34,7 @@ void main() {
 
     vec3 base = texture(uSourceTexture, uv).rgb;
     vec3 glass = texture(uBlurTexture, refractedUv).rgb;
-    vec3 color = mix(base, glass, clamp((0.36 + 0.30 * weight) * uIntensity, 0.0, 0.68));
+    vec3 color = mix(glass, base, clamp(uOriginalDetailWeight, 0.0, 1.0));
     color += 0.070 * weight * uIntensity;
 
     fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);

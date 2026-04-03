@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -45,6 +44,18 @@ class _BlurParams {
   final int radius;
 }
 
+class _BlendParams {
+  const _BlendParams({
+    required this.lowBytes,
+    required this.highBytes,
+    required this.mix,
+  });
+
+  final Uint8List lowBytes;
+  final Uint8List highBytes;
+  final double mix;
+}
+
 class BlurPreset {
   const BlurPreset({required this.scale, required this.radius});
 
@@ -59,46 +70,6 @@ const List<BlurPreset> kBlurPresets = [
   BlurPreset(scale: 0.58, radius: 32),
   BlurPreset(scale: 0.42, radius: 52),
 ];
-
-class _RenderParams {
-  const _RenderParams({
-    required this.sourceBytes,
-    required this.blurBytesLow,
-    required this.blurBytesHigh,
-    required this.blurMix,
-    required this.width,
-    required this.height,
-    required this.intensity,
-    required this.mapWidth,
-    required this.mapHeight,
-    required this.mapData,
-    required this.originalDetailWeight,
-  });
-
-  final Uint8List sourceBytes;
-  final Uint8List blurBytesLow;
-  final Uint8List blurBytesHigh;
-  final double blurMix;
-  final int width;
-  final int height;
-  final double intensity;
-  final int mapWidth;
-  final int mapHeight;
-  final Float32List mapData;
-  final double originalDetailWeight;
-}
-
-class _BlendParams {
-  const _BlendParams({
-    required this.lowBytes,
-    required this.highBytes,
-    required this.mix,
-  });
-
-  final Uint8List lowBytes;
-  final Uint8List highBytes;
-  final double mix;
-}
 
 Uint8List _blurIsolate(_BlurParams p) {
   img.Image working = img.Image.fromBytes(
@@ -134,211 +105,6 @@ Uint8List _blurIsolate(_BlurParams p) {
   return working.toUint8List();
 }
 
-double _clamp01(double value) => value < 0 ? 0 : (value > 1 ? 1 : value);
-
-double _smoothstep(double edge0, double edge1, double x) {
-  final t = _clamp01((x - edge0) / (edge1 - edge0));
-  return t * t * (3 - 2 * t);
-}
-
-double _mix(double a, double b, double t) => a + (b - a) * t;
-
-int _noopIsolate(int value) => value;
-
-class _EffectMap {
-  const _EffectMap({
-    required this.width,
-    required this.height,
-    required this.data,
-  });
-
-  final int width;
-  final int height;
-  final Float32List data;
-}
-
-_EffectMap _generateEffectMap(DistortionEffect effect) {
-  const width = 256;
-  const height = 512;
-  final data = Float32List(width * height * 2);
-
-  double idx(int x, int y, int channel) =>
-      ((y * width + x) * 2 + channel).toDouble();
-
-  for (var y = 0; y < height; y++) {
-    final v = y / (height - 1);
-    for (var x = 0; x < width; x++) {
-      final u = x / (width - 1);
-      final sample = _generateEffectSample(effect, u, v);
-      data[idx(x, y, 0).toInt()] = sample.dx.toDouble();
-      data[idx(x, y, 1).toInt()] = sample.dy.toDouble();
-    }
-  }
-
-  return _EffectMap(width: width, height: height, data: data);
-}
-
-({double dx, double dy}) _generateEffectSample(
-  DistortionEffect effect,
-  double u,
-  double v,
-) {
-  switch (effect) {
-    case DistortionEffect.original:
-      return (dx: 0, dy: 0);
-    case DistortionEffect.narrowReed:
-      const columns = 40.0;
-      final x = (u * columns) % 1.0;
-      final center = (x - 0.5) * 2.0;
-      final bend = center * center.abs();
-      return (dx: bend * 0.13, dy: 0.0);
-    case DistortionEffect.wideReed:
-      const columns = 14.0;
-      final x = (u * columns) % 1.0;
-      final center = (x - 0.5) * 2.0;
-      final bend = center * center.abs();
-      return (dx: bend * 0.18, dy: 0.0);
-    case DistortionEffect.lumina:
-      const streaks = 10.0;
-      final x = (u * streaks) % 1.0;
-      final stripeCenter = 1.0 - ((x - 0.5) * 2.0).abs();
-      final strength = stripeCenter.clamp(0.0, 1.0);
-      final drift = math.sin(v * 8.0) * 0.004 * strength;
-      final pull = -0.06 * strength * (0.3 + 0.7 * v);
-      return (dx: drift, dy: pull);
-    case DistortionEffect.grid:
-      const cellsX = 8.0;
-      const cellsY = 16.0;
-      final localX = (u * cellsX) % 1.0;
-      final localY = (v * cellsY) % 1.0;
-      final cx = (localX - 0.5) * 2.0;
-      final cy = (localY - 0.5) * 2.0;
-      final pinch = 1.0 - (cx.abs() + cy.abs()) * 0.5;
-      final influence = pinch.clamp(0.0, 1.0);
-      return (dx: cx * 0.035 * influence, dy: cy * 0.035 * influence);
-    case DistortionEffect.liquid:
-      final waveX = math.sin(v * 9.0 + u * 2.2);
-      final waveY = math.sin(u * 8.0 - v * 1.8);
-      return (dx: waveX * 0.055, dy: waveY * 0.02);
-    case DistortionEffect.ripple:
-      final cx = 0.5;
-      final cy = 0.5;
-      final rx = u - cx;
-      final ry = v - cy;
-      final radius = math.sqrt(rx * rx + ry * ry);
-      if (radius < 0.0001) return (dx: 0.0, dy: 0.0);
-      final amp = 0.030 * (1.0 - _smoothstep(0.0, 0.75, radius));
-      final wave = math.sin(radius * 28.0);
-      final push = amp * wave;
-      return (dx: (rx / radius) * push, dy: (ry / radius) * push);
-  }
-}
-
-({double dx, double dy}) _sampleEffectMap(
-  Float32List data,
-  int width,
-  int height,
-  double u,
-  double v,
-) {
-  final x = _clamp01(u) * (width - 1);
-  final y = _clamp01(v) * (height - 1);
-  final x0 = x.floor().clamp(0, width - 1);
-  final y0 = y.floor().clamp(0, height - 1);
-  final x1 = (x0 + 1).clamp(0, width - 1);
-  final y1 = (y0 + 1).clamp(0, height - 1);
-  final tx = x - x0;
-  final ty = y - y0;
-
-  double read(int px, int py, int channel) =>
-      data[(py * width + px) * 2 + channel];
-
-  double lerpChannel(int channel) {
-    final c00 = read(x0, y0, channel);
-    final c10 = read(x1, y0, channel);
-    final c01 = read(x0, y1, channel);
-    final c11 = read(x1, y1, channel);
-    final a = _mix(c00, c10, tx);
-    final b = _mix(c01, c11, tx);
-    return _mix(a, b, ty);
-  }
-
-  return (dx: lerpChannel(0), dy: lerpChannel(1));
-}
-
-Uint8List _renderEffectIsolate(_RenderParams p) {
-  final source = p.sourceBytes;
-  final blurLow = p.blurBytesLow;
-  final blurHigh = p.blurBytesHigh;
-  final blurMix = p.blurMix.clamp(0.0, 1.0);
-  final output = Uint8List(source.length);
-  final originalDetailWeight = p.originalDetailWeight.clamp(0.0, 1.0);
-  final blurWeight = 1.0 - originalDetailWeight;
-
-  for (var y = 0; y < p.height; y++) {
-    final v = y / (p.height - 1);
-    for (var x = 0; x < p.width; x++) {
-      final u = x / (p.width - 1);
-      final profile = _sampleEffectMap(
-        p.mapData,
-        p.mapWidth,
-        p.mapHeight,
-        u,
-        v,
-      );
-      final sx = _clamp01(u + profile.dx * p.intensity) * (p.width - 1);
-      final sy = _clamp01(v + profile.dy * p.intensity) * (p.height - 1);
-      final index = (y * p.width + x) * 4;
-
-      // Pipeline: blur -> distortion -> final.
-      final blurredDistortedLow = _sampleBilinearBytes(
-        blurLow,
-        p.width,
-        p.height,
-        sx,
-        sy,
-      );
-      final blurredDistortedHigh = _sampleBilinearBytes(
-        blurHigh,
-        p.width,
-        p.height,
-        sx,
-        sy,
-      );
-      final blurredDistorted = (
-        r: _mix(blurredDistortedLow.r, blurredDistortedHigh.r, blurMix),
-        g: _mix(blurredDistortedLow.g, blurredDistortedHigh.g, blurMix),
-        b: _mix(blurredDistortedLow.b, blurredDistortedHigh.b, blurMix),
-      );
-      // Tiny optional detail contribution from original (not dominant).
-      final originalDetail = _sampleBilinearBytes(
-        source,
-        p.width,
-        p.height,
-        u * (p.width - 1),
-        v * (p.height - 1),
-      );
-
-      final r =
-          blurredDistorted.r * blurWeight +
-          originalDetail.r * originalDetailWeight;
-      final g =
-          blurredDistorted.g * blurWeight +
-          originalDetail.g * originalDetailWeight;
-      final b =
-          blurredDistorted.b * blurWeight +
-          originalDetail.b * originalDetailWeight;
-
-      output[index] = (r * 255).round().clamp(0, 255);
-      output[index + 1] = (g * 255).round().clamp(0, 255);
-      output[index + 2] = (b * 255).round().clamp(0, 255);
-      output[index + 3] = source[index + 3];
-    }
-  }
-
-  return output;
-}
-
 Uint8List _blendIsolate(_BlendParams p) {
   final output = Uint8List(p.lowBytes.length);
   final mix = p.mix.clamp(0.0, 1.0);
@@ -352,60 +118,29 @@ Uint8List _blendIsolate(_BlendParams p) {
   return output;
 }
 
-({double r, double g, double b}) _sampleBilinearBytes(
-  Uint8List bytes,
-  int width,
-  int height,
-  double x,
-  double y,
-) {
-  final x0 = x.floor().clamp(0, width - 1);
-  final y0 = y.floor().clamp(0, height - 1);
-  final x1 = (x0 + 1).clamp(0, width - 1);
-  final y1 = (y0 + 1).clamp(0, height - 1);
-  final tx = x - x0;
-  final ty = y - y0;
-
-  final c00 = _readRgb(bytes, width, x0, y0);
-  final c10 = _readRgb(bytes, width, x1, y0);
-  final c01 = _readRgb(bytes, width, x0, y1);
-  final c11 = _readRgb(bytes, width, x1, y1);
-
-  final r0 = _mix(c00.r, c10.r, tx);
-  final g0 = _mix(c00.g, c10.g, tx);
-  final b0 = _mix(c00.b, c10.b, tx);
-  final r1 = _mix(c01.r, c11.r, tx);
-  final g1 = _mix(c01.g, c11.g, tx);
-  final b1 = _mix(c01.b, c11.b, tx);
-
-  return (r: _mix(r0, r1, ty), g: _mix(g0, g1, ty), b: _mix(b0, b1, ty));
-}
-
-({double r, double g, double b}) _readRgb(
-  Uint8List bytes,
-  int width,
-  int x,
-  int y,
-) {
-  final index = (y * width + x) * 4;
-  return (
-    r: bytes[index] / 255.0,
-    g: bytes[index + 1] / 255.0,
-    b: bytes[index + 2] / 255.0,
-  );
-}
+int _noopIsolate(int value) => value;
 
 class EffectRenderer {
-  final Map<DistortionEffect, Future<_EffectMap>> _effectMapFutures = {};
+  final Map<DistortionEffect, Future<ui.FragmentProgram>> _shaderPrograms = {};
 
-  Future<void> init() async {}
+  Future<void> init() async {
+    await Future.wait(
+      DistortionEffect.values
+          .where((effect) => effect != DistortionEffect.original)
+          .map(_shaderProgramFor),
+    );
+  }
 
   Future<void> prewarmIsolate() async {
     await compute(_noopIsolate, 1);
   }
 
   Future<void> prewarmEffectMaps(Iterable<DistortionEffect> effects) async {
-    await Future.wait(effects.map(_effectMapForAsync));
+    await Future.wait(
+      effects
+          .where((effect) => effect != DistortionEffect.original)
+          .map(_shaderProgramFor),
+    );
   }
 
   Future<ui.Image> render({
@@ -423,81 +158,27 @@ class EffectRenderer {
     );
 
     try {
-      final baseData = await source.toByteData(
-        format: ui.ImageByteFormat.rawRgba,
+      final blend = await _blendImages(
+        low: blurredBase,
+        high: blurredBaseSecondary ?? blurredBase,
+        mix: blurMix,
       );
-      if (baseData == null) {
-        return _copyImage(source);
-      }
-
-      final blurData = await blurredBase.toByteData(
-        format: ui.ImageByteFormat.rawRgba,
-      );
-      if (blurData == null) {
-        return _copyImage(source);
-      }
-      final secondary = blurredBaseSecondary ?? blurredBase;
-      final blurDataSecondary = await secondary.toByteData(
-        format: ui.ImageByteFormat.rawRgba,
-      );
-      if (blurDataSecondary == null) {
-        return _decodeRgba(
-          blurData.buffer.asUint8List(),
-          source.width,
-          source.height,
-        );
-      }
 
       if (effect == DistortionEffect.original) {
-        final normalizedMix = blurMix.clamp(0.0, 1.0);
-        if (normalizedMix <= 0.0001) {
-          return _decodeRgba(
-            blurData.buffer.asUint8List(),
-            source.width,
-            source.height,
-          );
-        }
-        if (normalizedMix >= 0.9999) {
-          return _decodeRgba(
-            blurDataSecondary.buffer.asUint8List(),
-            source.width,
-            source.height,
-          );
-        }
-        final blended = await compute(
-          _blendIsolate,
-          _BlendParams(
-            lowBytes: blurData.buffer.asUint8List(),
-            highBytes: blurDataSecondary.buffer.asUint8List(),
-            mix: normalizedMix,
-          ),
-        );
-        return _decodeRgba(
-          blended,
-          source.width,
-          source.height,
-        );
+        return blend;
       }
 
-      final map = await _effectMapForAsync(effect);
-      final bytes = await compute(
-        _renderEffectIsolate,
-        _RenderParams(
-          sourceBytes: baseData.buffer.asUint8List(),
-          blurBytesLow: blurData.buffer.asUint8List(),
-          blurBytesHigh: blurDataSecondary.buffer.asUint8List(),
-          blurMix: blurMix.clamp(0.0, 1.0),
-          width: source.width,
-          height: source.height,
+      try {
+        return await _renderWithShader(
+          source: source,
+          blurImage: blend,
+          effect: effect,
           intensity: intensity,
-          mapWidth: map.width,
-          mapHeight: map.height,
-          mapData: map.data,
-          originalDetailWeight: originalDetailWeight.clamp(0.0, 1.0),
-        ),
-      );
-
-      return _decodeRgba(bytes, source.width, source.height);
+          originalDetailWeight: originalDetailWeight,
+        );
+      } finally {
+        blend.dispose();
+      }
     } catch (_) {
       return _copyImage(blurredBase);
     }
@@ -524,22 +205,23 @@ class EffectRenderer {
     required double scale,
     required int radius,
   }) async {
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+    final byteData = await _rgbaByteData(image);
     if (byteData == null) {
       return _copyImage(image);
     }
 
+    final normalizedScale = scale.clamp(0.1, 1.0);
     final bytes = await compute(
       _blurIsolate,
       _BlurParams(
         bytes: byteData.buffer.asUint8List(),
         width: image.width,
         height: image.height,
-        scaledWidth: (image.width * scale.clamp(0.1, 1.0)).round().clamp(
+        scaledWidth: (image.width * normalizedScale).round().clamp(
           1,
           image.width,
         ),
-        scaledHeight: (image.height * scale.clamp(0.1, 1.0)).round().clamp(
+        scaledHeight: (image.height * normalizedScale).round().clamp(
           1,
           image.height,
         ),
@@ -550,32 +232,94 @@ class EffectRenderer {
     return _decodeRgba(bytes, image.width, image.height);
   }
 
-  Future<ui.Image> _copyImage(ui.Image source) async {
-    final byteData = await source.toByteData(
-      format: ui.ImageByteFormat.rawRgba,
-    );
-    if (byteData == null) {
-      final recorder = ui.PictureRecorder();
-      final canvas = ui.Canvas(
-        recorder,
-        ui.Rect.fromLTWH(
-          0,
-          0,
-          source.width.toDouble(),
-          source.height.toDouble(),
-        ),
-      );
-      canvas.drawImage(source, ui.Offset.zero, ui.Paint());
-      final picture = recorder.endRecording();
-      final copy = await picture.toImage(source.width, source.height);
-      picture.dispose();
-      return copy;
+  Future<ui.Image> _blendImages({
+    required ui.Image low,
+    required ui.Image high,
+    required double mix,
+  }) async {
+    final normalizedMix = mix.clamp(0.0, 1.0);
+    if (identical(low, high) || normalizedMix <= 0.0001) {
+      return _copyImage(low);
     }
-    return _decodeRgba(
-      byteData.buffer.asUint8List(),
-      source.width,
-      source.height,
+    if (normalizedMix >= 0.9999) {
+      return _copyImage(high);
+    }
+
+    final lowData = await _rgbaByteData(low);
+    final highData = await _rgbaByteData(high);
+    if (lowData == null || highData == null) {
+      return _rasterize(
+        width: low.width,
+        height: low.height,
+        painter: (canvas, size) {
+          canvas.drawImage(low, ui.Offset.zero, ui.Paint());
+          canvas.drawImage(
+            high,
+            ui.Offset.zero,
+            ui.Paint()
+              ..color = ui.Color.fromRGBO(255, 255, 255, normalizedMix),
+          );
+        },
+      );
+    }
+
+    final blended = await compute(
+      _blendIsolate,
+      _BlendParams(
+        lowBytes: lowData.buffer.asUint8List(),
+        highBytes: highData.buffer.asUint8List(),
+        mix: normalizedMix,
+      ),
     );
+    return _decodeRgba(blended, low.width, low.height);
+  }
+
+  Future<ui.Image> _renderWithShader({
+    required ui.Image source,
+    required ui.Image blurImage,
+    required DistortionEffect effect,
+    required double intensity,
+    required double originalDetailWeight,
+  }) async {
+    final program = await _shaderProgramFor(effect);
+    final shader = program.fragmentShader();
+    shader
+      ..setFloat(0, source.width.toDouble())
+      ..setFloat(1, source.height.toDouble())
+      ..setFloat(2, intensity.clamp(0.0, 1.0))
+      ..setFloat(3, 0.0)
+      ..setFloat(4, originalDetailWeight.clamp(0.0, 1.0))
+      ..setImageSampler(0, source)
+      ..setImageSampler(1, blurImage);
+
+    try {
+      return _rasterize(
+        width: source.width,
+        height: source.height,
+        painter: (canvas, size) {
+          canvas.drawRect(
+            ui.Rect.fromLTWH(0, 0, size.width, size.height),
+            ui.Paint()..shader = shader,
+          );
+        },
+      );
+    } finally {
+      shader.dispose();
+    }
+  }
+
+  Future<ui.Image> _copyImage(ui.Image source) {
+    return _rasterize(
+      width: source.width,
+      height: source.height,
+      painter: (canvas, size) {
+        canvas.drawImage(source, ui.Offset.zero, ui.Paint());
+      },
+    );
+  }
+
+  Future<ByteData?> _rgbaByteData(ui.Image image) {
+    return image.toByteData(format: ui.ImageByteFormat.rawRgba);
   }
 
   Future<ui.Image> _decodeRgba(Uint8List bytes, int width, int height) {
@@ -590,14 +334,46 @@ class EffectRenderer {
     return completer.future;
   }
 
-  void dispose() {}
+  Future<ui.Image> _rasterize({
+    required int width,
+    required int height,
+    required void Function(ui.Canvas canvas, ui.Size size) painter,
+  }) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = ui.Canvas(
+      recorder,
+      ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+    );
+    painter(canvas, ui.Size(width.toDouble(), height.toDouble()));
+    final picture = recorder.endRecording();
+    try {
+      return await picture.toImage(width, height);
+    } finally {
+      picture.dispose();
+    }
+  }
 
-  Future<_EffectMap> _effectMapForAsync(DistortionEffect effect) {
-    return _effectMapFutures.putIfAbsent(
+  Future<ui.FragmentProgram> _shaderProgramFor(DistortionEffect effect) {
+    return _shaderPrograms.putIfAbsent(
       effect,
-      () => compute(_generateEffectMap, effect),
+      () => ui.FragmentProgram.fromAsset(_shaderAssetFor(effect)),
     );
   }
+
+  void dispose() {}
+}
+
+String _shaderAssetFor(DistortionEffect effect) {
+  return switch (effect) {
+    DistortionEffect.original =>
+      throw ArgumentError.value(effect, 'effect', 'Original has no shader'),
+    DistortionEffect.narrowReed => 'effects/shaders/narrow_reed.glsl',
+    DistortionEffect.wideReed => 'effects/shaders/wide_reed.glsl',
+    DistortionEffect.lumina => 'effects/shaders/lumina.glsl',
+    DistortionEffect.grid => 'effects/shaders/grid.glsl',
+    DistortionEffect.liquid => 'effects/shaders/liquid.glsl',
+    DistortionEffect.ripple => 'effects/shaders/ripple.glsl',
+  };
 }
 
 class RenderedResult {

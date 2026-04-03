@@ -6,6 +6,7 @@ uniform float uWidth;
 uniform float uHeight;
 uniform float uIntensity;
 uniform float uTime;
+uniform float uOriginalDetailWeight;
 uniform sampler2D uSourceTexture;
 uniform sampler2D uBlurTexture;
 
@@ -39,7 +40,7 @@ void main() {
 
     vec3 base = texture(uSourceTexture, uv).rgb;
     vec3 glass = texture(uBlurTexture, refractedUv).rgb;
-    vec3 color = mix(base, glass, clamp((0.32 + tile * 0.36 + bulge * 0.10) * uIntensity, 0.0, 0.66));
+    vec3 color = mix(glass, base, clamp(uOriginalDetailWeight, 0.0, 1.0));
 
     float seamX = 1.0 - smoothstep(0.34, 0.48, abs(gv.x));
     float seamY = 1.0 - smoothstep(0.34, 0.48, abs(gv.y));
