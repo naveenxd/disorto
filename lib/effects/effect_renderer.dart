@@ -285,11 +285,19 @@ Uint8List _renderEffectIsolate(_RenderParams p) {
       final sx = _clamp01(u + profile.dx * p.intensity) * (p.width - 1);
       final sy = _clamp01(v + profile.dy * p.intensity) * (p.height - 1);
       final index = (y * p.width + x) * 4;
+
+      // Distort only the blurred image for matte glass.
       final glass = _sampleBilinearBytes(blur, p.width, p.height, sx, sy);
-      final detailMix = 0.20;
-      final r = _mix(glass.r, source[index] / 255.0, detailMix);
-      final g = _mix(glass.g, source[index + 1] / 255.0, detailMix);
-      final b = _mix(glass.b, source[index + 2] / 255.0, detailMix);
+      // Keep original sampled at non-distorted coordinates for detail only.
+      final ox = u * (p.width - 1);
+      final oy = v * (p.height - 1);
+      final orig = _sampleBilinearBytes(source, p.width, p.height, ox, oy);
+
+      const blurWeight = 0.85;
+      const originalWeight = 0.15;
+      final r = glass.r * blurWeight + orig.r * originalWeight;
+      final g = glass.g * blurWeight + orig.g * originalWeight;
+      final b = glass.b * blurWeight + orig.b * originalWeight;
 
       output[index] = (r * 255).round().clamp(0, 255);
       output[index + 1] = (g * 255).round().clamp(0, 255);

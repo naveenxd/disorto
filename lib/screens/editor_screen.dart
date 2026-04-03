@@ -233,27 +233,14 @@ class _EditorScreenState extends State<EditorScreen> {
     DistortionEffect effect,
     int blurLevel,
   ) async {
-    if (effect == DistortionEffect.original) {
-      return _getPreviewBlurBase(blurLevel);
-    }
-
-    // Non-original effects should still read as frosted glass even when the
-    // user blur slider is off, so keep a minimum internal blur for the glass
-    // layer and scale up from there.
-    final effectBlurLevel = blurLevel == 0 ? 1 : (blurLevel + 1).clamp(1, 4);
-    return _getPreviewBlurBase(effectBlurLevel);
+    return _getPreviewBlurBase(blurLevel);
   }
 
   Future<ui.Image> _getThumbEffectBase(
     DistortionEffect effect,
     int blurLevel,
   ) async {
-    if (effect == DistortionEffect.original) {
-      return _getThumbBlurBase(blurLevel);
-    }
-
-    final effectBlurLevel = blurLevel == 0 ? 1 : (blurLevel + 1).clamp(1, 4);
-    return _getThumbBlurBase(effectBlurLevel);
+    return _getThumbBlurBase(blurLevel);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
