@@ -61,7 +61,6 @@ class _RenderParams {
     required this.blurBytes,
     required this.width,
     required this.height,
-    required this.effectIndex,
     required this.intensity,
     required this.mapWidth,
     required this.mapHeight,
@@ -72,7 +71,6 @@ class _RenderParams {
   final Uint8List blurBytes;
   final int width;
   final int height;
-  final int effectIndex;
   final double intensity;
   final int mapWidth;
   final int mapHeight;
@@ -164,25 +162,17 @@ _EffectMap _generateEffectMap(DistortionEffect effect) {
     case DistortionEffect.original:
       return (dx: 0, dy: 0);
     case DistortionEffect.narrowReed:
-      final count = 34.0;
+      const count = 40.0;
       final bar = (u * count) % 1.0;
       final normal = (bar - 0.5) * 2.0;
-      final center = (1.0 - normal.abs()).clamp(0.0, 1.0);
-      return (
-        dx: normal * normal.abs() * 0.065 + (center - 0.5) * 0.004 + noise,
-        dy: noise * 0.4,
-      );
+      final reed = normal * math.pow(normal.abs(), 1.3);
+      return (dx: reed * 0.135, dy: 0.0);
     case DistortionEffect.wideReed:
-      final count = 15.0;
+      const count = 14.0;
       final bar = (u * count) % 1.0;
       final normal = (bar - 0.5) * 2.0;
-      final center = (1.0 - normal.abs()).clamp(0.0, 1.0);
-      final strip = (u * count).floorToDouble();
-      final yOffset = math.sin(strip * 0.8 + v * 2.5) * 0.010;
-      return (
-        dx: normal * normal.abs() * 0.090 + noise,
-        dy: yOffset * center + noise * 0.4,
-      );
+      final reed = normal * math.pow(normal.abs(), 1.2);
+      return (dx: reed * 0.185, dy: 0.0);
     case DistortionEffect.lumina:
       final count = 9.0;
       final bar = (u * count) % 1.0;
@@ -271,6 +261,9 @@ Uint8List _renderEffectIsolate(_RenderParams p) {
   final source = p.sourceBytes;
   final blur = p.blurBytes;
   final output = Uint8List(source.length);
+  const originalDetailWeight = 0.08;
+  const blurWeight = 1.0 - originalDetailWeight;
+
   for (var y = 0; y < p.height; y++) {
     final v = y / (p.height - 1);
     for (var x = 0; x < p.width; x++) {
@@ -286,18 +279,32 @@ Uint8List _renderEffectIsolate(_RenderParams p) {
       final sy = _clamp01(v + profile.dy * p.intensity) * (p.height - 1);
       final index = (y * p.width + x) * 4;
 
-      // Distort only the blurred image for matte glass.
-      final glass = _sampleBilinearBytes(blur, p.width, p.height, sx, sy);
-      // Keep original sampled at non-distorted coordinates for detail only.
-      final ox = u * (p.width - 1);
-      final oy = v * (p.height - 1);
-      final orig = _sampleBilinearBytes(source, p.width, p.height, ox, oy);
+      // Pipeline: blur -> distortion -> final.
+      final blurredDistorted = _sampleBilinearBytes(
+        blur,
+        p.width,
+        p.height,
+        sx,
+        sy,
+      );
+      // Tiny optional detail contribution from original (not dominant).
+      final originalDetail = _sampleBilinearBytes(
+        source,
+        p.width,
+        p.height,
+        u * (p.width - 1),
+        v * (p.height - 1),
+      );
 
-      const blurWeight = 0.85;
-      const originalWeight = 0.15;
-      final r = glass.r * blurWeight + orig.r * originalWeight;
-      final g = glass.g * blurWeight + orig.g * originalWeight;
-      final b = glass.b * blurWeight + orig.b * originalWeight;
+      final r =
+          blurredDistorted.r * blurWeight +
+          originalDetail.r * originalDetailWeight;
+      final g =
+          blurredDistorted.g * blurWeight +
+          originalDetail.g * originalDetailWeight;
+      final b =
+          blurredDistorted.b * blurWeight +
+          originalDetail.b * originalDetailWeight;
 
       output[index] = (r * 255).round().clamp(0, 255);
       output[index + 1] = (g * 255).round().clamp(0, 255);
@@ -399,7 +406,6 @@ class EffectRenderer {
           blurBytes: blurData.buffer.asUint8List(),
           width: source.width,
           height: source.height,
-          effectIndex: effect.index,
           intensity: intensity,
           mapWidth: _effectMapFor(effect).width,
           mapHeight: _effectMapFor(effect).height,
