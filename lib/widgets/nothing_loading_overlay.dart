@@ -66,9 +66,25 @@ class _NothingLoadingOverlayState extends State<NothingLoadingOverlay>
           fit: BoxFit.cover,
           filterQuality: FilterQuality.low,
         ),
-        ColoredBox(color: Colors.black.withValues(alpha: 0.66)),
+        ColoredBox(color: Colors.black.withValues(alpha: 0.8)),
         BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 4, sigmaY: 4),
+          child: const SizedBox.expand(),
+        ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment.center,
+              radius: 1.08,
+              colors: [
+                Colors.white.withValues(alpha: 0.0),
+                Colors.white.withValues(alpha: 0.0),
+                Colors.white.withValues(alpha: 0.03),
+                Colors.white.withValues(alpha: 0.07),
+              ],
+              stops: const [0.0, 0.58, 0.84, 1.0],
+            ),
+          ),
           child: const SizedBox.expand(),
         ),
         RepaintBoundary(
