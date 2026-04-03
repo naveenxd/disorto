@@ -413,9 +413,9 @@ class EffectRenderer {
 
   Future<ui.Image> prepareBlurredBase({
     required ui.Image source,
-    required int blurLevel,
+    required double blurValue,
   }) async {
-    final sliderValue = (blurLevel.clamp(0, 4) / 4.0).toDouble();
+    final sliderValue = _clamp01(blurValue);
     if (sliderValue <= 0.0) {
       return _copyImage(source);
     }

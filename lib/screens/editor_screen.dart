@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -34,7 +35,8 @@ class _EditorScreenState extends State<EditorScreen> {
 
   // ── Controls ───────────────────────────────────────────────────────────────
   DistortionEffect _effect = DistortionEffect.original;
-  int _blurLevel = 0; // 0-4
+  double _blurValue = 0.0; // 0.0-1.0
+  bool _isBlurDragging = false;
 
   // ── Thumbnail cache ────────────────────────────────────────────────────────
   // Keyed by DistortionEffect; generated at load time from a downscaled source.
@@ -42,6 +44,8 @@ class _EditorScreenState extends State<EditorScreen> {
   ui.Image? _thumbSource; // downscaled source for thumbnail rendering
   final Map<int, ui.Image> _previewBlurBases = {};
   final Map<int, ui.Image> _thumbBlurBases = {};
+  Timer? _blurDebounceTimer;
+  int _renderGeneration = 0;
 
   // ── Saving state ──────────────────────────────────────────────────────────
   bool _saving = false;
@@ -59,6 +63,7 @@ class _EditorScreenState extends State<EditorScreen> {
 
   @override
   void dispose() {
+    _blurDebounceTimer?.cancel();
     _renderer.dispose();
     _previewImage?.dispose();
     _sourceImage?.dispose();
@@ -96,11 +101,11 @@ class _EditorScreenState extends State<EditorScreen> {
     _thumbSource = await _downscale(_sourceImage!, targetWidth: 200);
     _previewBlurBases[0] = await _renderer.prepareBlurredBase(
       source: _sourceImage!,
-      blurLevel: 0,
+      blurValue: 0.0,
     );
     _thumbBlurBases[0] = await _renderer.prepareBlurredBase(
       source: _thumbSource!,
-      blurLevel: 0,
+      blurValue: 0.0,
     );
 
     // Kick off thumbnail generation for all effects (non-blocking fire-and-forget).
@@ -114,23 +119,34 @@ class _EditorScreenState extends State<EditorScreen> {
 
   Future<void> _rerender() async {
     if (_sourceImage == null) return;
+    final generation = ++_renderGeneration;
+    ui.Image? transientBlurBase;
     try {
-      final blurredBase = await _getPreviewEffectBase(_effect, _blurLevel);
+      final blurBaseResult = await _getPreviewEffectBase(_blurValue);
+      final blurredBase = blurBaseResult.image;
+      transientBlurBase = blurBaseResult.transient ? blurredBase : null;
       final rendered = await _renderer.render(
         source: _sourceImage!,
         blurredBase: blurredBase,
         effect: _effect,
         intensity: 1.0,
       );
+      transientBlurBase?.dispose();
+      transientBlurBase = null;
       if (!mounted) {
         rendered.dispose();
         return;
       }
+      if (generation != _renderGeneration) {
+        rendered.dispose();
+        return;
+      }
       setState(() {
-        _previewImage?.dispose();
+        _schedulePreviewImageDispose(_previewImage);
         _previewImage = rendered;
       });
     } catch (e) {
+      transientBlurBase?.dispose();
       if (!mounted) return;
       _showSnack('Effect render failed: $e');
     }
@@ -144,7 +160,7 @@ class _EditorScreenState extends State<EditorScreen> {
     if (_thumbSource == null) return;
     for (final effect in DistortionEffect.values) {
       if (!mounted) return;
-      final blurredBase = await _getThumbEffectBase(effect, 0);
+      final blurredBase = await _getThumbEffectBase(0.0);
       final thumb = await _renderer.render(
         source: _thumbSource!,
         blurredBase: blurredBase,
@@ -162,10 +178,11 @@ class _EditorScreenState extends State<EditorScreen> {
 
   Future<void> _warmBlurCaches() async {
     if (_sourceImage == null || _thumbSource == null) return;
-    for (final level in [1, 2, 3, 4]) {
+    for (final rawValue in [0.25, 0.5, 0.75, 1.0]) {
       if (!mounted) return;
-      await _getPreviewBlurBase(level);
-      await _getThumbBlurBase(level);
+      final eased = Curves.easeOutCubic.transform(rawValue);
+      await _getPreviewBlurBaseForKey(_blurCacheKey(eased));
+      await _getThumbBlurBaseForKey(_blurCacheKey(eased));
     }
   }
 
@@ -192,55 +209,69 @@ class _EditorScreenState extends State<EditorScreen> {
     final dir = await getTemporaryDirectory();
     final outPath =
         '${dir.path}/distorto_export_${DateTime.now().millisecondsSinceEpoch}.png';
-    final blurredBase = await _getPreviewEffectBase(_effect, _blurLevel);
+    final blurBaseResult = await _getPreviewEffectBase(_blurValue);
+    final blurredBase = blurBaseResult.image;
     final rendered = await _renderer.render(
       source: _sourceImage!,
       blurredBase: blurredBase,
       effect: _effect,
       intensity: 1.0,
     );
+    if (blurBaseResult.transient) {
+      blurredBase.dispose();
+    }
     final byteData = await rendered.toByteData(format: ui.ImageByteFormat.png);
     rendered.dispose();
     await File(outPath).writeAsBytes(byteData!.buffer.asUint8List());
     return outPath;
   }
 
-  Future<ui.Image> _getPreviewBlurBase(int level) async {
-    final cached = _previewBlurBases[level];
+  int _blurCacheKey(double value) => (value.clamp(0.0, 1.0) * 100).round();
+
+  Future<ui.Image> _getPreviewBlurBaseForKey(int key) async {
+    final cached = _previewBlurBases[key];
     if (cached != null) return cached;
 
     final image = await _renderer.prepareBlurredBase(
       source: _sourceImage!,
-      blurLevel: level,
+      blurValue: key / 100.0,
     );
-    _previewBlurBases[level] = image;
+    _previewBlurBases[key] = image;
     return image;
   }
 
-  Future<ui.Image> _getThumbBlurBase(int level) async {
-    final cached = _thumbBlurBases[level];
+  Future<ui.Image> _getThumbBlurBaseForKey(int key) async {
+    final cached = _thumbBlurBases[key];
     if (cached != null) return cached;
 
     final image = await _renderer.prepareBlurredBase(
       source: _thumbSource!,
-      blurLevel: level,
+      blurValue: key / 100.0,
     );
-    _thumbBlurBases[level] = image;
+    _thumbBlurBases[key] = image;
     return image;
   }
 
-  Future<ui.Image> _getPreviewEffectBase(
-    DistortionEffect effect,
-    int blurLevel,
+  Future<({ui.Image image, bool transient})> _getPreviewEffectBase(
+    double blurValue,
   ) async {
-    return _getPreviewBlurBase(blurLevel);
+    final eased = Curves.easeOutCubic.transform(blurValue.clamp(0.0, 1.0));
+    final position = eased * 100.0;
+    final lowKey = position.floor().clamp(0, 100);
+    final highKey = position.ceil().clamp(0, 100);
+    final t = position - lowKey;
+    final low = await _getPreviewBlurBaseForKey(lowKey);
+    if (highKey == lowKey || t <= 0.0001) {
+      return (image: low, transient: false);
+    }
+    final high = await _getPreviewBlurBaseForKey(highKey);
+    final interpolated = await _lerpImage(low, high, t);
+    return (image: interpolated, transient: true);
   }
 
-  Future<ui.Image> _getThumbEffectBase(
-    DistortionEffect effect,
-    int blurLevel,
-  ) async {
-    return _getThumbBlurBase(blurLevel);
+  Future<ui.Image> _getThumbEffectBase(double blurValue) async {
+    final eased = Curves.easeOutCubic.transform(blurValue.clamp(0.0, 1.0));
+    return _getThumbBlurBaseForKey(_blurCacheKey(eased));
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -253,10 +284,66 @@ class _EditorScreenState extends State<EditorScreen> {
     await _rerender();
   }
 
-  Future<void> _onBlurChanged(int level) async {
-    if (_blurLevel == level) return;
-    setState(() => _blurLevel = level);
-    await _rerender();
+  void _onBlurChanged(double value) {
+    final clamped = value.clamp(0.0, 1.0);
+    if ((_blurValue - clamped).abs() < 0.0001) return;
+    setState(() => _blurValue = clamped);
+    _scheduleDebouncedRender();
+  }
+
+  void _onBlurDragStart(double _) {
+    if (!_isBlurDragging) {
+      setState(() => _isBlurDragging = true);
+    }
+  }
+
+  void _onBlurDragEnd(double _) {
+    if (_isBlurDragging) {
+      setState(() => _isBlurDragging = false);
+    }
+    _scheduleDebouncedRender(immediate: true);
+  }
+
+  void _scheduleDebouncedRender({bool immediate = false}) {
+    _blurDebounceTimer?.cancel();
+    final delay = immediate ? Duration.zero : const Duration(milliseconds: 60);
+    _blurDebounceTimer = Timer(delay, () {
+      _rerender();
+    });
+  }
+
+  Future<ui.Image> _lerpImage(ui.Image a, ui.Image b, double t) async {
+    final width = a.width;
+    final height = a.height;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(
+      recorder,
+      ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+    );
+    canvas.drawImage(a, Offset.zero, Paint());
+    canvas.drawImage(
+      b,
+      Offset.zero,
+      Paint()..color = Color.fromRGBO(255, 255, 255, t.clamp(0.0, 1.0)),
+    );
+    final picture = recorder.endRecording();
+    final blended = await picture.toImage(width, height);
+    picture.dispose();
+    return blended;
+  }
+
+  void _schedulePreviewImageDispose(ui.Image? image) {
+    if (image == null) return;
+    final candidate = image;
+    Future<void>.delayed(const Duration(milliseconds: 220), () {
+      if (!mounted) {
+        candidate.dispose();
+        return;
+      }
+      if (!identical(candidate, _previewImage)) {
+        candidate.dispose();
+      }
+    });
   }
 
   Future<void> _onSave() async {
@@ -372,10 +459,13 @@ class _EditorScreenState extends State<EditorScreen> {
               right: 0,
               bottom: 0,
               child: _BottomPanel(
-                blurLevel: _blurLevel,
+                blurValue: _blurValue,
+                isDraggingBlur: _isBlurDragging,
                 selectedEffect: _effect,
                 thumbs: _thumbs,
                 onBlurChanged: _onBlurChanged,
+                onBlurChangeStart: _onBlurDragStart,
+                onBlurChangeEnd: _onBlurDragEnd,
                 onEffectSelected: _onEffectSelected,
               ),
             ),
@@ -544,17 +634,23 @@ class _ActionButton extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _BottomPanel extends StatelessWidget {
-  final int blurLevel;
+  final double blurValue;
+  final bool isDraggingBlur;
   final DistortionEffect selectedEffect;
   final Map<DistortionEffect, ui.Image?> thumbs;
-  final ValueChanged<int> onBlurChanged;
+  final ValueChanged<double> onBlurChanged;
+  final ValueChanged<double> onBlurChangeStart;
+  final ValueChanged<double> onBlurChangeEnd;
   final ValueChanged<DistortionEffect> onEffectSelected;
 
   const _BottomPanel({
-    required this.blurLevel,
+    required this.blurValue,
+    required this.isDraggingBlur,
     required this.selectedEffect,
     required this.thumbs,
     required this.onBlurChanged,
+    required this.onBlurChangeStart,
+    required this.onBlurChangeEnd,
     required this.onEffectSelected,
   });
 
@@ -584,7 +680,13 @@ class _BottomPanel extends StatelessWidget {
           const SizedBox(height: 18),
 
           // Blur section.
-          _BlurSection(blurLevel: blurLevel, onChanged: onBlurChanged),
+          _BlurSection(
+            blurValue: blurValue,
+            isDragging: isDraggingBlur,
+            onChanged: onBlurChanged,
+            onChangeStart: onBlurChangeStart,
+            onChangeEnd: onBlurChangeEnd,
+          ),
 
           const SizedBox(height: 20),
 
@@ -607,10 +709,19 @@ class _BottomPanel extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _BlurSection extends StatelessWidget {
-  final int blurLevel;
-  final ValueChanged<int> onChanged;
+  final double blurValue;
+  final bool isDragging;
+  final ValueChanged<double> onChanged;
+  final ValueChanged<double> onChangeStart;
+  final ValueChanged<double> onChangeEnd;
 
-  const _BlurSection({required this.blurLevel, required this.onChanged});
+  const _BlurSection({
+    required this.blurValue,
+    required this.isDragging,
+    required this.onChanged,
+    required this.onChangeStart,
+    required this.onChangeEnd,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -632,106 +743,71 @@ class _BlurSection extends StatelessWidget {
               ),
               const Spacer(),
               Text(
-                '${(blurLevel.clamp(0, 4) * 25)}%',
+                '${(blurValue.clamp(0.0, 1.0) * 100).round()}%',
                 style: const TextStyle(color: Color(0xFF888888), fontSize: 12),
               ),
             ],
           ),
           const SizedBox(height: 10),
-          _DotSlider(value: blurLevel, max: 4, onChanged: onChanged),
+          _BlurSlider(
+            value: blurValue,
+            isDragging: isDragging,
+            onChanged: onChanged,
+            onChangeStart: onChangeStart,
+            onChangeEnd: onChangeEnd,
+          ),
         ],
       ),
     );
   }
 }
 
-// ── 5-step discrete dot slider ────────────────────────────────────────────────
+class _BlurSlider extends StatelessWidget {
+  final double value;
+  final bool isDragging;
+  final ValueChanged<double> onChanged;
+  final ValueChanged<double> onChangeStart;
+  final ValueChanged<double> onChangeEnd;
 
-class _DotSlider extends StatelessWidget {
-  final int value;
-  final int max;
-  final ValueChanged<int> onChanged;
-
-  const _DotSlider({
+  const _BlurSlider({
     required this.value,
-    required this.max,
+    required this.isDragging,
     required this.onChanged,
+    required this.onChangeStart,
+    required this.onChangeEnd,
   });
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapDown: (details) => _updateFromDx(details.localPosition.dx, context),
-      onHorizontalDragUpdate: (details) =>
-          _updateFromDx(details.localPosition.dx, context),
-      child: SizedBox(
-        height: 36,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final w = constraints.maxWidth;
-            return Stack(
-              alignment: Alignment.center,
-              children: [
-                // Track line.
-                Container(
-                  height: 2,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF333333),
-                    borderRadius: BorderRadius.circular(1),
-                  ),
-                ),
-                // Active track.
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Container(
-                    height: 2,
-                    width: max == 0 ? 0 : w * value / max,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(1),
-                    ),
-                  ),
-                ),
-                // Step dots.
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: List.generate(max + 1, (i) {
-                    final active = i <= value;
-                    final current = i == value;
-                    return AnimatedContainer(
-                      duration: const Duration(milliseconds: 150),
-                      width: current ? 18 : 10,
-                      height: current ? 18 : 10,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: active ? Colors.white : const Color(0xFF333333),
-                        boxShadow: current
-                            ? [
-                                BoxShadow(
-                                  color: Colors.white.withAlpha(80),
-                                  blurRadius: 8,
-                                ),
-                              ]
-                            : null,
-                      ),
-                    );
-                  }),
-                ),
-              ],
-            );
-          },
+    return AnimatedScale(
+      duration: const Duration(milliseconds: 140),
+      scale: isDragging ? 1.015 : 1.0,
+      curve: Curves.easeOutCubic,
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 140),
+        opacity: isDragging ? 1.0 : 0.95,
+        child: SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            trackHeight: 2.0,
+            activeTrackColor: Colors.white,
+            inactiveTrackColor: const Color(0xFF333333),
+            thumbColor: Colors.white,
+            overlayColor: Colors.white.withAlpha(28),
+            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+            overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+          ),
+          child: Slider(
+            value: value.clamp(0.0, 1.0),
+            min: 0.0,
+            max: 1.0,
+            divisions: null,
+            onChanged: onChanged,
+            onChangeStart: onChangeStart,
+            onChangeEnd: onChangeEnd,
+          ),
         ),
       ),
     );
-  }
-
-  void _updateFromDx(double dx, BuildContext context) {
-    final box = context.findRenderObject() as RenderBox?;
-    if (box == null) return;
-    final w = box.size.width;
-    final stepped = (dx / w * max).round().clamp(0, max);
-    onChanged(stepped);
   }
 }
 
