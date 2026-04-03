@@ -25,16 +25,6 @@ extension DistortionEffectX on DistortionEffect {
     DistortionEffect.liquid => 'Liquid',
     DistortionEffect.ripple => 'Ripple',
   };
-
-  String? get shaderAsset => switch (this) {
-    DistortionEffect.original => null,
-    DistortionEffect.narrowReed => 'effects/shaders/narrow_reed.glsl',
-    DistortionEffect.wideReed => 'effects/shaders/wide_reed.glsl',
-    DistortionEffect.lumina => 'effects/shaders/lumina.glsl',
-    DistortionEffect.grid => 'effects/shaders/grid.glsl',
-    DistortionEffect.liquid => 'effects/shaders/liquid.glsl',
-    DistortionEffect.ripple => 'effects/shaders/ripple.glsl',
-  };
 }
 
 class _BlurParams {
@@ -536,50 +526,4 @@ class RenderedResult {
       newBlurLevel == blurLevel;
 
   void dispose() => image.dispose();
-}
-
-class ShaderProgramCache {
-  final Map<String, Future<ui.FragmentProgram>> _pending = {};
-  final Map<String, ui.FragmentProgram> _ready = {};
-
-  Future<void> init() async {
-    await Future.wait(
-      DistortionEffect.values
-          .where((effect) => effect.shaderAsset != null)
-          .map((effect) => loadProgram(effect)),
-    );
-  }
-
-  Future<ui.FragmentProgram?> loadProgram(DistortionEffect effect) async {
-    final asset = effect.shaderAsset;
-    if (asset == null) {
-      return null;
-    }
-    final cached = _ready[asset];
-    if (cached != null) {
-      return cached;
-    }
-
-    final pending = _pending.putIfAbsent(
-      asset,
-      () => ui.FragmentProgram.fromAsset(asset),
-    );
-    final program = await pending;
-    _ready[asset] = program;
-    _pending.remove(asset);
-    return program;
-  }
-
-  ui.FragmentProgram? getCachedProgram(DistortionEffect effect) {
-    final asset = effect.shaderAsset;
-    if (asset == null) {
-      return null;
-    }
-    return _ready[asset];
-  }
-
-  void dispose() {
-    _pending.clear();
-    _ready.clear();
-  }
 }

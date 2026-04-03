@@ -24,15 +24,12 @@ class EditorScreen extends StatefulWidget {
 class _EditorScreenState extends State<EditorScreen> {
   // ── Renderer ───────────────────────────────────────────────────────────────
   final EffectRenderer _renderer = EffectRenderer();
-  final ShaderProgramCache _shaderProgramCache = ShaderProgramCache();
 
   // ── Source image (full-res, never mutated) ─────────────────────────────────
   ui.Image? _sourceImage;
 
   // ── Processing state ───────────────────────────────────────────────────────
-  ui.Image? _previewBlurImage;
-  ui.FragmentShader? _previewShader;
-  bool _rendering = false;
+  ui.Image? _previewImage;
   bool _initialising = true;
 
   // ── Controls ───────────────────────────────────────────────────────────────
@@ -63,7 +60,7 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   void dispose() {
     _renderer.dispose();
-    _shaderProgramCache.dispose();
+    _previewImage?.dispose();
     _sourceImage?.dispose();
     _thumbSource?.dispose();
     for (final t in _thumbs.values) {
@@ -92,9 +89,8 @@ class _EditorScreenState extends State<EditorScreen> {
     codec.dispose();
     _sourceImage = frame.image;
 
-    // Pre-warm shaders.
+    // Initialize renderer.
     await _renderer.init();
-    await _shaderProgramCache.init();
 
     // Build a downscaled copy for thumbnail rendering (~200px wide).
     _thumbSource = await _downscale(_sourceImage!, targetWidth: 200);
@@ -118,20 +114,24 @@ class _EditorScreenState extends State<EditorScreen> {
 
   Future<void> _rerender() async {
     if (_sourceImage == null) return;
-    setState(() => _rendering = true);
     try {
       final blurredBase = await _getPreviewEffectBase(_effect, _blurLevel);
-      final program = await _shaderProgramCache.loadProgram(_effect);
-      final shader = program?.fragmentShader();
-      if (!mounted) return;
+      final rendered = await _renderer.render(
+        source: _sourceImage!,
+        blurredBase: blurredBase,
+        effect: _effect,
+        intensity: 1.0,
+      );
+      if (!mounted) {
+        rendered.dispose();
+        return;
+      }
       setState(() {
-        _previewBlurImage = blurredBase;
-        _previewShader = shader;
-        _rendering = false;
+        _previewImage?.dispose();
+        _previewImage = rendered;
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _rendering = false);
       _showSnack('Effect render failed: $e');
     }
   }
@@ -336,12 +336,8 @@ class _EditorScreenState extends State<EditorScreen> {
           children: [
             // ── Full-screen image preview ────────────────────────────────
             _PreviewPane(
-              sourceImage: _sourceImage,
-              blurImage: _previewBlurImage,
-              effect: _effect,
-              shader: _previewShader,
+              previewImage: _previewImage,
               initialising: _initialising,
-              rendering: _rendering,
             ),
 
             // ── Top-right action buttons ─────────────────────────────────
@@ -395,21 +391,10 @@ class _EditorScreenState extends State<EditorScreen> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _PreviewPane extends StatelessWidget {
-  final ui.Image? sourceImage;
-  final ui.Image? blurImage;
-  final DistortionEffect effect;
-  final ui.FragmentShader? shader;
+  final ui.Image? previewImage;
   final bool initialising;
-  final bool rendering;
 
-  const _PreviewPane({
-    required this.sourceImage,
-    required this.blurImage,
-    required this.effect,
-    required this.shader,
-    required this.initialising,
-    required this.rendering,
-  });
+  const _PreviewPane({required this.previewImage, required this.initialising});
 
   @override
   Widget build(BuildContext context) {
@@ -418,15 +403,10 @@ class _PreviewPane extends StatelessWidget {
         duration: const Duration(milliseconds: 280),
         child: initialising
             ? const _LoadingPlaceholder(key: ValueKey('loading'))
-            : sourceImage != null && blurImage != null
+            : previewImage != null
             ? _ImageDisplay(
-                key: ValueKey(
-                  '${sourceImage.hashCode}-${blurImage.hashCode}-${effect.index}',
-                ),
-                sourceImage: sourceImage!,
-                blurImage: blurImage!,
-                effect: effect,
-                shader: shader,
+                key: ValueKey('${previewImage.hashCode}'),
+                image: previewImage!,
               )
             : const _LoadingPlaceholder(key: ValueKey('blank')),
       ),
@@ -435,18 +415,9 @@ class _PreviewPane extends StatelessWidget {
 }
 
 class _ImageDisplay extends StatelessWidget {
-  final ui.Image sourceImage;
-  final ui.Image blurImage;
-  final DistortionEffect effect;
-  final ui.FragmentShader? shader;
+  final ui.Image image;
 
-  const _ImageDisplay({
-    super.key,
-    required this.sourceImage,
-    required this.blurImage,
-    required this.effect,
-    required this.shader,
-  });
+  const _ImageDisplay({super.key, required this.image});
 
   @override
   Widget build(BuildContext context) {
@@ -454,74 +425,12 @@ class _ImageDisplay extends StatelessWidget {
       child: FittedBox(
         fit: BoxFit.cover,
         child: SizedBox(
-          width: sourceImage.width.toDouble(),
-          height: sourceImage.height.toDouble(),
-          child: RepaintBoundary(
-            child: CustomPaint(
-              painter: _ShaderPreviewPainter(
-                sourceImage: sourceImage,
-                blurImage: blurImage,
-                effect: effect,
-                intensity: 1.0,
-                shader: shader,
-              ),
-            ),
-          ),
+          width: image.width.toDouble(),
+          height: image.height.toDouble(),
+          child: RawImage(image: image, fit: BoxFit.fill),
         ),
       ),
     );
-  }
-}
-
-class _ShaderPreviewPainter extends CustomPainter {
-  const _ShaderPreviewPainter({
-    required this.sourceImage,
-    required this.blurImage,
-    required this.effect,
-    required this.intensity,
-    required this.shader,
-  });
-
-  final ui.Image sourceImage;
-  final ui.Image blurImage;
-  final DistortionEffect effect;
-  final double intensity;
-  final ui.FragmentShader? shader;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    final activeShader = shader;
-    const timeSeconds = 0.0;
-
-    if (effect == DistortionEffect.original || activeShader == null) {
-      paintImage(
-        canvas: canvas,
-        rect: rect,
-        image: blurImage,
-        fit: BoxFit.fill,
-      );
-      return;
-    }
-
-    activeShader
-      ..setFloat(0, size.width)
-      ..setFloat(1, size.height)
-      ..setFloat(2, intensity)
-      ..setFloat(3, timeSeconds)
-      ..setImageSampler(0, sourceImage)
-      ..setImageSampler(1, blurImage);
-
-    canvas.drawRect(rect, Paint()..shader = activeShader);
-  }
-
-  @override
-  bool shouldRepaint(covariant _ShaderPreviewPainter oldDelegate) {
-    return oldDelegate.sourceImage != sourceImage ||
-        oldDelegate.blurImage != blurImage ||
-        oldDelegate.effect != effect ||
-        oldDelegate.intensity != intensity ||
-        oldDelegate.shader != shader;
   }
 }
 
