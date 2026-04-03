@@ -44,10 +44,6 @@ void main() {
     vec3 glass = texture(uBlurTexture, sampleUv).rgb;
     vec3 color = mix(glass, base, clamp(uOriginalDetailWeight, 0.0, 1.0));
 
-    // -------------------------------------------------------------
-    // THE FIX: Nuvvu cheppina "Black place lo lines" problem ki solution
-    // -------------------------------------------------------------
-    // Image loni brightness (luminance) ni calculate chesthunnam.
     float luminance = dot(color, vec3(0.299, 0.587, 0.114));
 
     // 4. LIGHTING
