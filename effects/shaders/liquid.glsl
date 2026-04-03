@@ -13,19 +13,19 @@ out vec4 fragColor;
 
 void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
-    uv.x += sin(uv.y * 6.0 + uTime * 1.0) * 0.010 * uIntensity;
-    float noise = sin(uv.y * 80.0 + uv.x * 40.0 + uTime * 1.4) * 0.002;
-    uv.x += noise;
+    uv.x += sin(uv.y * 6.0 + uTime * 1.0) * 0.015 * uIntensity;
+    float noise = fract(sin(dot((uv + vec2(uTime * 0.012, uTime * 0.01)) * 100.0, vec2(12.9898, 78.233))) * 43758.5453);
+    uv += (noise - 0.5) * 0.002;
 
     float weight = 0.32 + 0.68 * pow(uv.y, 1.25);
-    float wave1 = sin(uv.y * 6.0 + uv.x * 3.0 + uTime * 1.3);
-    float wave2 = sin(uv.y * 10.5 - uv.x * 1.8 - uTime * 1.7);
-    float wave3 = sin(uv.y * 16.0 + uv.x * 0.6 + uTime * 2.2);
+    float wave1 = sin(uv.y * 5.2 + uv.x * 2.5 + uTime * 1.1);
+    float wave2 = sin(uv.y * 8.8 - uv.x * 1.6 - uTime * 1.5);
+    float wave3 = sin(uv.y * 13.2 + uv.x * 0.8 + uTime * 1.9);
 
     vec2 refractedUv = clamp(
         uv + vec2(
-            (wave1 * 0.042 + wave2 * 0.024 + wave3 * 0.012) * weight * uIntensity,
-            (wave2 * 0.010 + wave3 * 0.005) * weight * uIntensity
+            (wave1 * 0.060 + wave2 * 0.034 + wave3 * 0.020) * weight * uIntensity,
+            (wave2 * 0.014 + wave3 * 0.008) * weight * uIntensity
         ),
         0.0,
         1.0
@@ -33,8 +33,8 @@ void main() {
 
     vec3 base = texture(uSourceTexture, uv).rgb;
     vec3 glass = texture(uBlurTexture, refractedUv).rgb;
-    vec3 color = mix(base, glass, clamp((0.34 + 0.28 * weight) * uIntensity, 0.0, 0.68));
-    color += 0.055 * weight * uIntensity;
+    vec3 color = mix(base, glass, clamp((0.36 + 0.30 * weight) * uIntensity, 0.0, 0.68));
+    color += 0.070 * weight * uIntensity;
 
     fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
 }
