@@ -163,6 +163,8 @@ _EffectMap _generateEffectMap(DistortionEffect effect) {
 
 ({double dx, double dy, double overlay, double highlight, double shadow})
 _generateEffectSample(DistortionEffect effect, double u, double v) {
+  final noise = (math.sin(u * 120.0 + v * 80.0) - 0.5) * 0.003;
+
   switch (effect) {
     case DistortionEffect.original:
       return (dx: 0, dy: 0, overlay: 0, highlight: 0, shadow: 0);
@@ -175,11 +177,11 @@ _generateEffectSample(DistortionEffect effect, double u, double v) {
       final seam = 1.0 - _smoothstep(0.42, 0.50, normal.abs());
       final micro = (_tri(v * 42.0 + (u * count).floorToDouble() * 0.13) - 0.5);
       return (
-        dx: normal * normal.abs() * 0.040 + micro * mask * 0.004,
-        dy: micro * mask * 0.0015,
-        overlay: 0.28 + 0.30 * mask,
-        highlight: 0.070 * mask,
-        shadow: 0.10 * seam,
+        dx: normal * normal.abs() * 0.078 + micro * mask * 0.006 + noise,
+        dy: micro * mask * 0.0025 + noise * 0.5,
+        overlay: 0.58 + 0.20 * mask,
+        highlight: 0.12 * mask,
+        shadow: 0.18 * seam,
       );
     case DistortionEffect.wideReed:
       final count = 15.0;
@@ -189,13 +191,13 @@ _generateEffectSample(DistortionEffect effect, double u, double v) {
       final mask = math.pow(center, 1.7).toDouble();
       final strip = (u * count).floorToDouble();
       final seam = 1.0 - _smoothstep(0.38, 0.50, normal.abs());
-      final yOffset = math.sin(strip * 0.8 + v * 2.5) * 0.006;
+      final yOffset = math.sin(strip * 0.8 + v * 2.5) * 0.010;
       return (
-        dx: normal * normal.abs() * 0.060,
-        dy: yOffset * mask,
-        overlay: 0.32 + 0.34 * mask,
-        highlight: 0.090 * mask,
-        shadow: 0.12 * seam,
+        dx: normal * normal.abs() * 0.105 + noise,
+        dy: yOffset * mask + noise * 0.5,
+        overlay: 0.60 + 0.18 * mask,
+        highlight: 0.15 * mask,
+        shadow: 0.22 * seam,
       );
     case DistortionEffect.lumina:
       final count = 9.0;
@@ -205,11 +207,11 @@ _generateEffectSample(DistortionEffect effect, double u, double v) {
       final mask = math.pow(center, 3.6).toDouble();
       final rise = math.pow(v, 1.8).toDouble();
       return (
-        dx: math.sin(v * 8.0 + u * 4.0) * mask * 0.003,
-        dy: -mask * rise * 0.030,
-        overlay: 0.12 + 0.12 * mask * rise,
-        highlight: 0.045 * mask,
-        shadow: 0,
+        dx: math.sin(v * 8.0 + u * 4.0) * mask * 0.006 + noise,
+        dy: -mask * rise * 0.058 + noise * 0.5,
+        overlay: 0.56 + 0.18 * mask * rise,
+        highlight: 0.09 * mask,
+        shadow: 0.03 * mask * rise,
       );
     case DistortionEffect.grid:
       const cellsX = 6.2;
@@ -222,17 +224,17 @@ _generateEffectSample(DistortionEffect effect, double u, double v) {
         (qx > 0 ? qx : 0) * (qx > 0 ? qx : 0) +
             (qy > 0 ? qy : 0) * (qy > 0 ? qy : 0),
       );
-      final tile = 1.0 - _smoothstep(0.03, 0.12, radius);
-      final seamX = 1.0 - _smoothstep(0.35, 0.48, gx.abs());
-      final seamY = 1.0 - _smoothstep(0.35, 0.48, gy.abs());
+      final tile = 1.0 - _smoothstep(0.02, 0.10, radius);
+      final seamX = 1.0 - _smoothstep(0.32, 0.46, gx.abs());
+      final seamY = 1.0 - _smoothstep(0.32, 0.46, gy.abs());
       final seam = seamX > seamY ? seamX : seamY;
       final bulge = (0.22 - (gx * gx + gy * gy)).clamp(0.0, 0.22) / 0.22;
       return (
-        dx: gx * 0.032 * tile,
-        dy: gy * 0.032 * tile,
-        overlay: 0.24 * tile + 0.10 * bulge,
-        highlight: 0.070 * seam + 0.025 * bulge,
-        shadow: 0.11 * seam,
+        dx: gx * 0.064 * tile + noise,
+        dy: gy * 0.064 * tile + noise * 0.5,
+        overlay: 0.56 + 0.16 * tile + 0.08 * bulge,
+        highlight: 0.12 * seam + 0.05 * bulge,
+        shadow: 0.20 * seam,
       );
     case DistortionEffect.liquid:
       final weight = 0.30 + 0.70 * math.pow(v, 1.35).toDouble();
@@ -242,12 +244,13 @@ _generateEffectSample(DistortionEffect effect, double u, double v) {
       final wave4 = math.sin(v * 23.0 + u * 4.0) * 0.35;
       return (
         dx:
-            (wave1 * 0.080 + wave2 * 0.040 + wave3 * 0.018 + wave4 * 0.012) *
-            weight,
-        dy: (wave2 * 0.018 + wave3 * 0.008) * weight,
-        overlay: 0.36 + 0.30 * weight,
-        highlight: 0.070 * weight,
-        shadow: 0,
+            (wave1 * 0.120 + wave2 * 0.060 + wave3 * 0.028 + wave4 * 0.020) *
+                weight +
+            noise,
+        dy: (wave2 * 0.028 + wave3 * 0.012) * weight + noise * 0.5,
+        overlay: 0.60 + 0.18 * weight,
+        highlight: 0.10 * weight,
+        shadow: 0.03 * weight,
       );
     case DistortionEffect.ripple:
       final cx = 0.5;
@@ -259,16 +262,16 @@ _generateEffectSample(DistortionEffect effect, double u, double v) {
       final lens = 1.0 - _smoothstep(0.0, 0.42, dist);
       final ring =
           math.sin(dist * 26.0) * (1.0 - _smoothstep(0.06, 0.52, dist));
-      final radius = dist * (1.0 - lens * 0.58) + ring * 0.028;
+      final radius = dist * (1.0 - lens * 0.82) + ring * 0.045;
       final angle = math.atan2(dy, dx);
       dx = math.cos(angle) * radius / aspect - (u - cx);
       dy = math.sin(angle) * radius - (v - cy);
       return (
-        dx: dx,
-        dy: dy,
-        overlay: 0.80 * lens,
-        highlight: 0.12 * lens,
-        shadow: 0,
+        dx: dx * 1.7 + noise,
+        dy: dy * 1.7 + noise * 0.5,
+        overlay: 0.58 + 0.20 * lens,
+        highlight: 0.20 * lens,
+        shadow: 0.08 * lens,
       );
   }
 }
@@ -325,20 +328,26 @@ Uint8List _renderEffectIsolate(_RenderParams p) {
       final sy = _clamp01(v + profile.dy * p.intensity) * (p.height - 1);
       final index = (y * p.width + x) * 4;
       final glass = _sampleBilinearBytes(blur, p.width, p.height, sx, sy);
-      final overlay = _clamp01(profile.overlay * p.intensity);
+      final overlayBase = _mix(0.55, 0.80, _clamp01(profile.overlay));
+      final overlay = _mix(0.0, overlayBase, p.intensity);
+      final detailWeight = (1.0 - overlay) * 0.35;
+
+      final matteR = _mix(source[index] / 255.0, glass.r, overlay);
+      final matteG = _mix(source[index + 1] / 255.0, glass.g, overlay);
+      final matteB = _mix(source[index + 2] / 255.0, glass.b, overlay);
 
       final r = _clamp01(
-        _mix(source[index] / 255.0, glass.r, overlay) +
+        _mix(matteR, source[index] / 255.0, detailWeight) +
             profile.highlight * p.intensity -
             profile.shadow * p.intensity,
       );
       final g = _clamp01(
-        _mix(source[index + 1] / 255.0, glass.g, overlay) +
+        _mix(matteG, source[index + 1] / 255.0, detailWeight) +
             profile.highlight * p.intensity -
             profile.shadow * p.intensity,
       );
       final b = _clamp01(
-        _mix(source[index + 2] / 255.0, glass.b, overlay) +
+        _mix(matteB, source[index + 2] / 255.0, detailWeight) +
             profile.highlight * p.intensity -
             profile.shadow * p.intensity,
       );
@@ -477,16 +486,16 @@ class EffectRenderer {
     }
 
     final scale = switch (blurLevel) {
-      1 => 0.80,
-      2 => 0.62,
-      3 => 0.48,
-      _ => 0.36,
+      1 => 0.90,
+      2 => 0.75,
+      3 => 0.65,
+      _ => 0.55,
     };
     final radius = switch (blurLevel) {
-      1 => 5,
-      2 => 8,
-      3 => 12,
-      _ => 16,
+      1 => 6,
+      2 => 10,
+      3 => 14,
+      _ => 18,
     };
 
     final bytes = await compute(
