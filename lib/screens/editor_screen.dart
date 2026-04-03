@@ -30,6 +30,7 @@ class _EditorScreenState extends State<EditorScreen> {
   static const int _previewMaxDimension = 1400; // hard cap for UI rendering
   static const Duration _renderDebounceDelay = Duration(milliseconds: 66);
   static const Duration _minRenderInterval = Duration(milliseconds: 84);
+  static const Duration _minimumLoaderDuration = Duration(milliseconds: 600);
 
   // ── Renderer ───────────────────────────────────────────────────────────────
   final EffectRenderer _renderer = EffectRenderer();
@@ -40,7 +41,7 @@ class _EditorScreenState extends State<EditorScreen> {
 
   // ── Processing state ───────────────────────────────────────────────────────
   ui.Image? _previewImage;
-  bool _initialising = true;
+  bool _isEditorReady = false;
 
   // ── Controls ───────────────────────────────────────────────────────────────
   DistortionEffect _effect = DistortionEffect.original;
@@ -65,6 +66,7 @@ class _EditorScreenState extends State<EditorScreen> {
   bool _saving = false;
   bool _wallpapering = false;
   late final ImageProvider _loadingBackground;
+  late final DateTime _editorLoadStartedAt;
 
   // ─────────────────────────────────────────────────────────────────────────
   // Lifecycle
@@ -74,6 +76,7 @@ class _EditorScreenState extends State<EditorScreen> {
   void initState() {
     super.initState();
     _loadingBackground = FileImage(File(widget.imagePath));
+    _editorLoadStartedAt = DateTime.now();
     _bootstrap();
   }
 
@@ -113,7 +116,6 @@ class _EditorScreenState extends State<EditorScreen> {
     }
     setState(() {
       _previewSource = preview;
-      _initialising = false;
     });
 
     // Heavy processing stays fully asynchronous and never blocks first paint.
@@ -124,13 +126,17 @@ class _EditorScreenState extends State<EditorScreen> {
     if (_previewSource == null || !mounted) return;
     await _renderer.init();
 
-    // Start with an immediate render pass using whatever cache is available.
-    _scheduleDebouncedRender(immediate: true);
-
-    // Blur cache generation (background): level 0 first, then the rest.
+    // Build minimum usable pipeline first: blur cache + first render.
     await _precomputePreviewBlurLevel(0);
+    if (_blurLevels > 1) {
+      await _precomputePreviewBlurLevel(1);
+    }
+    await _runRenderNow();
+    await _markEditorReadyWhenMinimumTimeElapsed();
+
+    // Non-critical warmup and remaining blur levels continue in background.
     unawaited(_runBackgroundPrewarm());
-    for (var level = 1; level < _blurLevels; level++) {
+    for (var level = 2; level < _blurLevels; level++) {
       if (!mounted) return;
       await _precomputePreviewBlurLevel(level);
     }
@@ -141,6 +147,16 @@ class _EditorScreenState extends State<EditorScreen> {
 
     // Thumbnails are non-critical: build lazily in background.
     unawaited(_prepareThumbPipeline());
+  }
+
+  Future<void> _markEditorReadyWhenMinimumTimeElapsed() async {
+    final elapsed = DateTime.now().difference(_editorLoadStartedAt);
+    final remaining = _minimumLoaderDuration - elapsed;
+    if (remaining > Duration.zero) {
+      await Future<void>.delayed(remaining);
+    }
+    if (!mounted) return;
+    setState(() => _isEditorReady = true);
   }
 
   Future<void> _runRenderNow() async {
@@ -590,7 +606,7 @@ class _EditorScreenState extends State<EditorScreen> {
             // ── Full-screen image preview ────────────────────────────────
             _PreviewPane(
               previewImage: _previewImage ?? _previewSource,
-              initialising: _initialising,
+              initialising: _previewSource == null,
             ),
 
             // ── Top-right action buttons ─────────────────────────────────
@@ -638,7 +654,7 @@ class _EditorScreenState extends State<EditorScreen> {
               ),
             ),
 
-            if (_initialising || _saving || _wallpapering)
+            if (!_isEditorReady || _saving || _wallpapering)
               Positioned.fill(
                 child: IgnorePointer(
                   ignoring: false,
