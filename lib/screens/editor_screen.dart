@@ -38,7 +38,8 @@ class _EditorScreenState extends State<EditorScreen> {
 
   // ── Controls ───────────────────────────────────────────────────────────────
   DistortionEffect _effect = DistortionEffect.original;
-  double _blurValue = 0.0; // 0.0-1.0
+  double _rawBlurValue = 0.0; // 0.0-1.0 (UI motion)
+  int _snappedBlurIndex = 0; // actual blur preset index
   bool _isBlurDragging = false;
 
   // ── Thumbnail cache ────────────────────────────────────────────────────────
@@ -143,7 +144,7 @@ class _EditorScreenState extends State<EditorScreen> {
       final rendered = await _renderInterpolatedEffect(
         source: _previewSource!,
         effect: _effect,
-        blurValue: _blurValue,
+        blurIndex: _snappedBlurIndex,
         blurCache: _previewBlurBases,
       );
       if (!mounted) {
@@ -258,7 +259,7 @@ class _EditorScreenState extends State<EditorScreen> {
     final rendered = await _renderInterpolatedEffect(
       source: _sourceImage!,
       effect: _effect,
-      blurValue: _blurValue,
+      blurIndex: _snappedBlurIndex,
       blurCache: _exportBlurBases,
     );
     final byteData = await rendered.toByteData(format: ui.ImageByteFormat.png);
@@ -283,14 +284,6 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  ({int lower, int upper, double t}) _resolveBlurLevels(double sliderValue) {
-    final scaled = sliderValue.clamp(0.0, 1.0) * (_blurLevels - 1);
-    final lower = scaled.floor().clamp(0, _blurLevels - 1);
-    final upper = scaled.ceil().clamp(0, _blurLevels - 1);
-    final t = scaled - lower;
-    return (lower: lower, upper: upper, t: t);
-  }
-
   ui.Image _getCachedBlurLevel(
     Map<int, ui.Image> cache,
     int level,
@@ -310,33 +303,20 @@ class _EditorScreenState extends State<EditorScreen> {
   Future<ui.Image> _renderInterpolatedEffect({
     required ui.Image source,
     required DistortionEffect effect,
-    required double blurValue,
+    required int blurIndex,
     required Map<int, ui.Image> blurCache,
   }) async {
-    final levels = _resolveBlurLevels(blurValue);
-    final blurA = _getCachedBlurLevel(blurCache, levels.lower, source);
-    final renderA = await _renderer.render(
+    final blurBase = _getCachedBlurLevel(
+      blurCache,
+      blurIndex.clamp(0, _blurLevels - 1),
+      source,
+    );
+    return _renderer.render(
       source: source,
-      blurredBase: blurA,
+      blurredBase: blurBase,
       effect: effect,
       intensity: 1.0,
     );
-
-    if (levels.upper == levels.lower || levels.t <= 0.0001) {
-      return renderA;
-    }
-
-    final blurB = _getCachedBlurLevel(blurCache, levels.upper, source);
-    final renderB = await _renderer.render(
-      source: source,
-      blurredBase: blurB,
-      effect: effect,
-      intensity: 1.0,
-    );
-    final blended = await _lerpImage(renderA, renderB, levels.t);
-    renderA.dispose();
-    renderB.dispose();
-    return blended;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -351,11 +331,10 @@ class _EditorScreenState extends State<EditorScreen> {
 
   void _onBlurChanged(double value) {
     final clamped = value.clamp(0.0, 1.0);
-    if ((_blurValue - clamped).abs() < 0.0001) return;
+    if ((_rawBlurValue - clamped).abs() < 0.0001) return;
     setState(() {
-      _blurValue = clamped;
+      _rawBlurValue = clamped;
     });
-    _scheduleDebouncedRender();
   }
 
   void _onBlurDragStart(double _) {
@@ -365,10 +344,29 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _onBlurDragEnd(double _) {
+    final steps = _blurLevels - 1;
+    final nextIndex = (_rawBlurValue.clamp(0.0, 1.0) * steps).round().clamp(
+      0,
+      steps,
+    );
+    final target = nextIndex / steps;
+    final shouldRender = nextIndex != _snappedBlurIndex;
     if (_isBlurDragging) {
-      setState(() => _isBlurDragging = false);
+      setState(() {
+        _isBlurDragging = false;
+        _rawBlurValue = target;
+        _snappedBlurIndex = nextIndex;
+      });
+    } else {
+      setState(() {
+        _rawBlurValue = target;
+        _snappedBlurIndex = nextIndex;
+      });
     }
-    _scheduleDebouncedRender(immediate: true);
+    if (shouldRender) {
+      HapticFeedback.selectionClick();
+      _scheduleDebouncedRender(immediate: true);
+    }
   }
 
   void _scheduleDebouncedRender({bool immediate = false}) {
@@ -377,26 +375,6 @@ class _EditorScreenState extends State<EditorScreen> {
     _blurDebounceTimer = Timer(delay, () {
       _rerender();
     });
-  }
-
-  Future<ui.Image> _lerpImage(ui.Image a, ui.Image b, double t) async {
-    final width = a.width;
-    final height = a.height;
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(
-      recorder,
-      ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
-    );
-    canvas.drawImage(a, Offset.zero, Paint());
-    canvas.drawImage(
-      b,
-      Offset.zero,
-      Paint()..color = Color.fromRGBO(255, 255, 255, t.clamp(0.0, 1.0)),
-    );
-    final picture = recorder.endRecording();
-    final blended = await picture.toImage(width, height);
-    picture.dispose();
-    return blended;
   }
 
   void _schedulePreviewImageDispose(ui.Image? image) {
@@ -526,8 +504,10 @@ class _EditorScreenState extends State<EditorScreen> {
               right: 0,
               bottom: 0,
               child: _BottomPanel(
-                blurValue: _blurValue,
+                blurValue: _rawBlurValue,
                 isDraggingBlur: _isBlurDragging,
+                snappedBlurIndex: _snappedBlurIndex,
+                blurSteps: _blurLevels - 1,
                 selectedEffect: _effect,
                 thumbs: _thumbs,
                 onBlurChanged: _onBlurChanged,
@@ -703,6 +683,8 @@ class _ActionButton extends StatelessWidget {
 class _BottomPanel extends StatelessWidget {
   final double blurValue;
   final bool isDraggingBlur;
+  final int snappedBlurIndex;
+  final int blurSteps;
   final DistortionEffect selectedEffect;
   final Map<DistortionEffect, ui.Image?> thumbs;
   final ValueChanged<double> onBlurChanged;
@@ -713,6 +695,8 @@ class _BottomPanel extends StatelessWidget {
   const _BottomPanel({
     required this.blurValue,
     required this.isDraggingBlur,
+    required this.snappedBlurIndex,
+    required this.blurSteps,
     required this.selectedEffect,
     required this.thumbs,
     required this.onBlurChanged,
@@ -750,6 +734,8 @@ class _BottomPanel extends StatelessWidget {
           _BlurSection(
             blurValue: blurValue,
             isDragging: isDraggingBlur,
+            snappedBlurIndex: snappedBlurIndex,
+            blurSteps: blurSteps,
             onChanged: onBlurChanged,
             onChangeStart: onBlurChangeStart,
             onChangeEnd: onBlurChangeEnd,
@@ -778,6 +764,8 @@ class _BottomPanel extends StatelessWidget {
 class _BlurSection extends StatelessWidget {
   final double blurValue;
   final bool isDragging;
+  final int snappedBlurIndex;
+  final int blurSteps;
   final ValueChanged<double> onChanged;
   final ValueChanged<double> onChangeStart;
   final ValueChanged<double> onChangeEnd;
@@ -785,6 +773,8 @@ class _BlurSection extends StatelessWidget {
   const _BlurSection({
     required this.blurValue,
     required this.isDragging,
+    required this.snappedBlurIndex,
+    required this.blurSteps,
     required this.onChanged,
     required this.onChangeStart,
     required this.onChangeEnd,
@@ -809,9 +799,20 @@ class _BlurSection extends StatelessWidget {
                 ),
               ),
               const Spacer(),
-              Text(
-                '${(blurValue.clamp(0.0, 1.0) * 100).round()}%',
-                style: const TextStyle(color: Color(0xFF888888), fontSize: 12),
+              AnimatedOpacity(
+                duration: const Duration(milliseconds: 160),
+                curve: Curves.easeOutCubic,
+                opacity: isDragging ? 1.0 : 0.58,
+                child: Text(
+                  '${((isDragging ? blurValue : (snappedBlurIndex / blurSteps)) * 100).round()}%',
+                  style: TextStyle(
+                    color: isDragging
+                        ? Colors.white.withAlpha(230)
+                        : const Color(0xFF888888),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
               ),
             ],
           ),
@@ -829,7 +830,7 @@ class _BlurSection extends StatelessWidget {
   }
 }
 
-class _BlurSlider extends StatelessWidget {
+class _BlurSlider extends StatefulWidget {
   final double value;
   final bool isDragging;
   final ValueChanged<double> onChanged;
@@ -845,34 +846,161 @@ class _BlurSlider extends StatelessWidget {
   });
 
   @override
+  State<_BlurSlider> createState() => _BlurSliderState();
+}
+
+class _BlurSliderState extends State<_BlurSlider> {
+  double _animatedValue = 0.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _animatedValue = widget.value.clamp(0.0, 1.0);
+  }
+
+  @override
+  void didUpdateWidget(covariant _BlurSlider oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final next = widget.value.clamp(0.0, 1.0);
+    if ((next - _animatedValue).abs() > 0.0001 && !widget.isDragging) {
+      _animatedValue = next;
+    }
+  }
+
+  double _valueFromDx(double dx, double width) {
+    if (width <= 0) return widget.value.clamp(0.0, 1.0);
+    return (dx / width).clamp(0.0, 1.0);
+  }
+
+  void _handleTapDown(TapDownDetails details, double width) {
+    final next = _valueFromDx(details.localPosition.dx, width);
+    widget.onChangeStart(widget.value.clamp(0.0, 1.0));
+    widget.onChanged(next);
+  }
+
+  void _handleTapUp() {
+    widget.onChangeEnd(widget.value.clamp(0.0, 1.0));
+  }
+
+  void _handlePanStart() {
+    widget.onChangeStart(widget.value.clamp(0.0, 1.0));
+  }
+
+  void _handlePanUpdate(DragUpdateDetails details, double width) {
+    widget.onChanged(_valueFromDx(details.localPosition.dx, width));
+  }
+
+  void _handlePanEnd() {
+    widget.onChangeEnd(widget.value.clamp(0.0, 1.0));
+  }
+
+  void _handlePanCancel() {
+    widget.onChangeEnd(widget.value.clamp(0.0, 1.0));
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return AnimatedScale(
-      duration: const Duration(milliseconds: 140),
-      scale: isDragging ? 1.015 : 1.0,
-      curve: Curves.easeOutCubic,
-      child: AnimatedOpacity(
-        duration: const Duration(milliseconds: 140),
-        opacity: isDragging ? 1.0 : 0.95,
-        child: SliderTheme(
-          data: SliderTheme.of(context).copyWith(
-            trackHeight: 2.0,
-            activeTrackColor: Colors.white,
-            inactiveTrackColor: const Color(0xFF333333),
-            thumbColor: Colors.white,
-            overlayColor: Colors.white.withAlpha(28),
-            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-            overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
-          ),
-          child: Slider(
-            value: value.clamp(0.0, 1.0),
-            min: 0.0,
-            max: 1.0,
-            divisions: null,
-            onChanged: onChanged,
-            onChangeStart: onChangeStart,
-            onChangeEnd: onChangeEnd,
-          ),
-        ),
+    final value = widget.value.clamp(0.0, 1.0);
+    final isDragging = widget.isDragging;
+    final duration = Duration(milliseconds: isDragging ? 120 : 170);
+    _animatedValue = isDragging ? value : _animatedValue;
+
+    return SizedBox(
+      height: 42,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final trackWidth = constraints.maxWidth;
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (details) => _handleTapDown(details, trackWidth),
+            onTapUp: (_) => _handleTapUp(),
+            onHorizontalDragStart: (_) => _handlePanStart(),
+            onHorizontalDragUpdate: (details) =>
+                _handlePanUpdate(details, trackWidth),
+            onHorizontalDragEnd: (_) => _handlePanEnd(),
+            onHorizontalDragCancel: _handlePanCancel,
+            child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(begin: _animatedValue, end: value),
+              duration: duration,
+              curve: Curves.easeOutCubic,
+              builder: (context, visualValue, _) {
+                if (!isDragging) {
+                  _animatedValue = visualValue;
+                }
+                final thumbDiameter = isDragging ? 16.0 : 14.0;
+                final trackHeight = isDragging ? 3.0 : 2.0;
+                final activeWidth = trackWidth * visualValue;
+                final thumbLeft = activeWidth - thumbDiameter / 2;
+
+                return Stack(
+                  alignment: Alignment.centerLeft,
+                  clipBehavior: Clip.none,
+                  children: [
+                    AnimatedContainer(
+                      duration: duration,
+                      curve: Curves.easeOutCubic,
+                      height: trackHeight,
+                      width: trackWidth,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withAlpha(isDragging ? 48 : 34),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                    AnimatedContainer(
+                      duration: duration,
+                      curve: Curves.easeOutCubic,
+                      height: trackHeight,
+                      width: activeWidth,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withAlpha(isDragging ? 250 : 238),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                    AnimatedPositioned(
+                      duration: duration,
+                      curve: Curves.easeOutCubic,
+                      left: thumbLeft.clamp(
+                        -thumbDiameter / 2,
+                        trackWidth - thumbDiameter / 2,
+                      ),
+                      child: AnimatedScale(
+                        duration: duration,
+                        curve: Curves.easeOutCubic,
+                        scale: isDragging ? 1.15 : 1.0,
+                        child: AnimatedContainer(
+                          duration: duration,
+                          curve: Curves.easeOutCubic,
+                          width: thumbDiameter,
+                          height: thumbDiameter,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: isDragging
+                                ? Colors.white
+                                : Colors.white.withAlpha(240),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.white.withAlpha(
+                                  isDragging ? 125 : 65,
+                                ),
+                                blurRadius: isDragging ? 16 : 10,
+                                spreadRadius: isDragging ? 1.2 : 0.4,
+                              ),
+                              BoxShadow(
+                                color: Colors.black.withAlpha(120),
+                                blurRadius: 6,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          );
+        },
       ),
     );
   }
