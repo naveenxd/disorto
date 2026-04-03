@@ -183,72 +183,54 @@ _EffectMap _generateEffectMap(DistortionEffect effect) {
   double u,
   double v,
 ) {
-  final noise = (math.sin(u * 120.0 + v * 80.0) - 0.5) * 0.003;
-
   switch (effect) {
     case DistortionEffect.original:
       return (dx: 0, dy: 0);
     case DistortionEffect.narrowReed:
-      const count = 40.0;
-      final bar = (u * count) % 1.0;
-      final normal = (bar - 0.5) * 2.0;
-      final reed = normal * math.pow(normal.abs(), 1.3);
-      return (dx: reed * 0.135, dy: 0.0);
+      const columns = 40.0;
+      final x = (u * columns) % 1.0;
+      final center = (x - 0.5) * 2.0;
+      final bend = center * center.abs();
+      return (dx: bend * 0.13, dy: 0.0);
     case DistortionEffect.wideReed:
-      const count = 14.0;
-      final bar = (u * count) % 1.0;
-      final normal = (bar - 0.5) * 2.0;
-      final reed = normal * math.pow(normal.abs(), 1.2);
-      return (dx: reed * 0.185, dy: 0.0);
+      const columns = 14.0;
+      final x = (u * columns) % 1.0;
+      final center = (x - 0.5) * 2.0;
+      final bend = center * center.abs();
+      return (dx: bend * 0.18, dy: 0.0);
     case DistortionEffect.lumina:
-      final count = 9.0;
-      final bar = (u * count) % 1.0;
-      final normal = (bar - 0.5) * 2.0;
-      final center = (1.0 - normal.abs()).clamp(0.0, 1.0);
-      final rise = v * v;
-      return (
-        dx: math.sin(v * 6.0 + u * 2.0) * center * 0.006 + noise,
-        dy: -center * rise * 0.050 + noise * 0.4,
-      );
+      const streaks = 10.0;
+      final x = (u * streaks) % 1.0;
+      final stripeCenter = 1.0 - ((x - 0.5) * 2.0).abs();
+      final strength = stripeCenter.clamp(0.0, 1.0);
+      final drift = math.sin(v * 8.0) * 0.004 * strength;
+      final pull = -0.06 * strength * (0.3 + 0.7 * v);
+      return (dx: drift, dy: pull);
     case DistortionEffect.grid:
-      const cellsX = 6.2;
-      const cellsY = 6.2 * (512.0 / 256.0);
-      final gx = (u * cellsX) % 1.0 - 0.5;
-      final gy = (v * cellsY) % 1.0 - 0.5;
-      final qx = gx.abs() - 0.24;
-      final qy = gy.abs() - 0.24;
-      final radius = math.sqrt(
-        (qx > 0 ? qx : 0) * (qx > 0 ? qx : 0) +
-            (qy > 0 ? qy : 0) * (qy > 0 ? qy : 0),
-      );
-      final tile = 1.0 - _smoothstep(0.02, 0.10, radius);
-      return (
-        dx: gx * 0.055 * tile + noise,
-        dy: gy * 0.055 * tile + noise * 0.4,
-      );
+      const cellsX = 8.0;
+      const cellsY = 16.0;
+      final localX = (u * cellsX) % 1.0;
+      final localY = (v * cellsY) % 1.0;
+      final cx = (localX - 0.5) * 2.0;
+      final cy = (localY - 0.5) * 2.0;
+      final pinch = 1.0 - (cx.abs() + cy.abs()) * 0.5;
+      final influence = pinch.clamp(0.0, 1.0);
+      return (dx: cx * 0.035 * influence, dy: cy * 0.035 * influence);
     case DistortionEffect.liquid:
-      final weight = 0.35 + 0.65 * v;
-      final wave1 = math.sin(v * 5.0 + u * 2.2);
-      final wave2 = math.sin(v * 9.0 - u * 1.1);
-      return (
-        dx: (wave1 * 0.100 + wave2 * 0.050) * weight + noise,
-        dy: wave2 * 0.020 * weight + noise * 0.4,
-      );
+      final waveX = math.sin(v * 9.0 + u * 2.2);
+      final waveY = math.sin(u * 8.0 - v * 1.8);
+      return (dx: waveX * 0.055, dy: waveY * 0.02);
     case DistortionEffect.ripple:
       final cx = 0.5;
-      final cy = 0.57;
-      const aspect = 256.0 / 512.0;
-      var dx = (u - cx) * aspect;
-      var dy = v - cy;
-      final dist = math.sqrt(dx * dx + dy * dy);
-      final lens = 1.0 - _smoothstep(0.0, 0.42, dist);
-      final ring =
-          math.sin(dist * 26.0) * (1.0 - _smoothstep(0.06, 0.52, dist));
-      final radius = dist * (1.0 - lens * 0.82) + ring * 0.045;
-      final angle = math.atan2(dy, dx);
-      dx = math.cos(angle) * radius / aspect - (u - cx);
-      dy = math.sin(angle) * radius - (v - cy);
-      return (dx: dx * 1.4 + noise, dy: dy * 1.4 + noise * 0.4);
+      final cy = 0.5;
+      final rx = u - cx;
+      final ry = v - cy;
+      final radius = math.sqrt(rx * rx + ry * ry);
+      if (radius < 0.0001) return (dx: 0.0, dy: 0.0);
+      final amp = 0.030 * (1.0 - _smoothstep(0.0, 0.75, radius));
+      final wave = math.sin(radius * 28.0);
+      final push = amp * wave;
+      return (dx: (rx / radius) * push, dy: (ry / radius) * push);
   }
 }
 
