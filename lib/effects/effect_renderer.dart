@@ -54,10 +54,10 @@ class BlurPreset {
 
 const List<BlurPreset> kBlurPresets = [
   BlurPreset(scale: 1.0, radius: 0),
-  BlurPreset(scale: 0.9, radius: 6),
-  BlurPreset(scale: 0.75, radius: 12),
-  BlurPreset(scale: 0.6, radius: 18),
-  BlurPreset(scale: 0.5, radius: 26),
+  BlurPreset(scale: 0.92, radius: 6),
+  BlurPreset(scale: 0.75, radius: 16),
+  BlurPreset(scale: 0.58, radius: 32),
+  BlurPreset(scale: 0.42, radius: 52),
 ];
 
 class _RenderParams {
@@ -72,6 +72,7 @@ class _RenderParams {
     required this.mapWidth,
     required this.mapHeight,
     required this.mapData,
+    required this.originalDetailWeight,
   });
 
   final Uint8List sourceBytes;
@@ -84,6 +85,7 @@ class _RenderParams {
   final int mapWidth;
   final int mapHeight;
   final Float32List mapData;
+  final double originalDetailWeight;
 }
 
 class _BlendParams {
@@ -288,8 +290,8 @@ Uint8List _renderEffectIsolate(_RenderParams p) {
   final blurHigh = p.blurBytesHigh;
   final blurMix = p.blurMix.clamp(0.0, 1.0);
   final output = Uint8List(source.length);
-  const originalDetailWeight = 0.08;
-  const blurWeight = 1.0 - originalDetailWeight;
+  final originalDetailWeight = p.originalDetailWeight.clamp(0.0, 1.0);
+  final blurWeight = 1.0 - originalDetailWeight;
 
   for (var y = 0; y < p.height; y++) {
     final v = y / (p.height - 1);
@@ -431,6 +433,7 @@ class EffectRenderer {
     required ui.Image blurredBase,
     ui.Image? blurredBaseSecondary,
     double blurMix = 0.0,
+    double originalDetailWeight = 0.08,
     required DistortionEffect effect,
     double intensity = 1.0,
   }) async {
@@ -509,6 +512,7 @@ class EffectRenderer {
           mapWidth: _effectMapFor(effect).width,
           mapHeight: _effectMapFor(effect).height,
           mapData: _effectMapFor(effect).data,
+          originalDetailWeight: originalDetailWeight.clamp(0.0, 1.0),
         ),
       );
 

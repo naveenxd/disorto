@@ -307,6 +307,9 @@ class _EditorScreenState extends State<EditorScreen> {
       rendered = await _renderer.render(
         source: fullResSource,
         blurredBase: exportBlur,
+        originalDetailWeight: _detailWeightForBlurValue(
+          _snappedBlurIndex / (_blurLevels - 1),
+        ),
         effect: _effect,
         intensity: 1.0,
       );
@@ -368,6 +371,11 @@ class _EditorScreenState extends State<EditorScreen> {
     return (low: low, high: high, mix: mix);
   }
 
+  double _detailWeightForBlurValue(double blurValue) {
+    final t = blurValue.clamp(0.0, 1.0);
+    return ui.lerpDouble(0.12, 0.02, t) ?? 0.08;
+  }
+
   Future<ui.Image> _renderInterpolatedEffect({
     required ui.Image source,
     required DistortionEffect effect,
@@ -384,6 +392,7 @@ class _EditorScreenState extends State<EditorScreen> {
       blurredBase: blend.low,
       blurredBaseSecondary: blend.high,
       blurMix: blend.mix,
+      originalDetailWeight: _detailWeightForBlurValue(blurValue),
       effect: effect,
       intensity: 1.0,
     );
