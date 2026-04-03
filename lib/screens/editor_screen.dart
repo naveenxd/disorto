@@ -361,7 +361,6 @@ class _EditorScreenState extends State<EditorScreen>
               effect: _effect,
               shader: _previewShader,
               animation: _timeController,
-              timeSeconds: _timeController.value * 24.0,
               initialising: _initialising,
               rendering: _rendering,
             ),
@@ -422,7 +421,6 @@ class _PreviewPane extends StatelessWidget {
   final DistortionEffect effect;
   final ui.FragmentShader? shader;
   final Animation<double> animation;
-  final double timeSeconds;
   final bool initialising;
   final bool rendering;
 
@@ -432,7 +430,6 @@ class _PreviewPane extends StatelessWidget {
     required this.effect,
     required this.shader,
     required this.animation,
-    required this.timeSeconds,
     required this.initialising,
     required this.rendering,
   });
@@ -454,7 +451,6 @@ class _PreviewPane extends StatelessWidget {
                 effect: effect,
                 shader: shader,
                 animation: animation,
-                timeSeconds: timeSeconds,
               )
             : const _LoadingPlaceholder(key: ValueKey('blank')),
       ),
@@ -468,7 +464,6 @@ class _ImageDisplay extends StatelessWidget {
   final DistortionEffect effect;
   final ui.FragmentShader? shader;
   final Animation<double> animation;
-  final double timeSeconds;
 
   const _ImageDisplay({
     super.key,
@@ -477,7 +472,6 @@ class _ImageDisplay extends StatelessWidget {
     required this.effect,
     required this.shader,
     required this.animation,
-    required this.timeSeconds,
   });
 
   @override
@@ -497,7 +491,7 @@ class _ImageDisplay extends StatelessWidget {
                 intensity: 1.0,
                 shader: shader,
                 repaint: animation,
-                timeSeconds: timeSeconds,
+                animation: animation,
               ),
             ),
           ),
@@ -515,7 +509,7 @@ class _ShaderPreviewPainter extends CustomPainter {
     required this.intensity,
     required this.shader,
     required this.repaint,
-    required this.timeSeconds,
+    required this.animation,
   }) : super(repaint: repaint);
 
   final ui.Image sourceImage;
@@ -524,12 +518,13 @@ class _ShaderPreviewPainter extends CustomPainter {
   final double intensity;
   final ui.FragmentShader? shader;
   final Listenable repaint;
-  final double timeSeconds;
+  final Animation<double> animation;
 
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
     final activeShader = shader;
+    final timeSeconds = animation.value * 24.0;
 
     if (effect == DistortionEffect.original || activeShader == null) {
       paintImage(
@@ -559,7 +554,7 @@ class _ShaderPreviewPainter extends CustomPainter {
         oldDelegate.effect != effect ||
         oldDelegate.intensity != intensity ||
         oldDelegate.shader != shader ||
-        oldDelegate.timeSeconds != timeSeconds;
+        oldDelegate.animation != animation;
   }
 }
 
