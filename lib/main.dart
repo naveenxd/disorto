@@ -1,11 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
-import 'screens/editor_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/loader_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Entry point
@@ -223,7 +224,7 @@ class _AppShellState extends State<_AppShell> {
 
     // Cold-start share detected → go straight to editor.
     if (_sharedImagePath != null) {
-      return EditorScreen(imagePath: _sharedImagePath!);
+      return LoaderScreen(image: File(_sharedImagePath!));
     }
 
     // Normal launch → show home.

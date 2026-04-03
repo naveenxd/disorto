@@ -1,10 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
-import 'editor_screen.dart';
+import 'loader_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HomeScreen
@@ -115,19 +116,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _navigateToEditor(String path) {
-    Navigator.of(context).push(
-      PageRouteBuilder<void>(
-        pageBuilder: (context, animation, secondaryAnimation) =>
-            EditorScreen(imagePath: path),
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          return FadeTransition(
-            opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
-            child: child,
-          );
-        },
-        transitionDuration: const Duration(milliseconds: 350),
-      ),
-    );
+    Navigator.of(context).push(buildLoaderRoute(File(path)));
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────

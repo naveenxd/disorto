@@ -12,6 +12,107 @@ import '../services/image_export_service.dart';
 import '../services/wallpaper_service.dart';
 import '../widgets/nothing_loading_overlay.dart';
 
+class EditorScreenData {
+  final String imagePath;
+  final Uint8List sourceBytes;
+  final ui.Image previewSource;
+  final ui.Image previewImage;
+  final Map<int, ui.Image> previewBlurBases;
+  final EffectRenderer renderer;
+
+  const EditorScreenData({
+    required this.imagePath,
+    required this.sourceBytes,
+    required this.previewSource,
+    required this.previewImage,
+    required this.previewBlurBases,
+    required this.renderer,
+  });
+}
+
+Future<EditorScreenData> prepareInitialState(File image) async {
+  final sourceBytes = await image.readAsBytes();
+  final previewSource = await _decodePreviewFromBytes(sourceBytes);
+  final renderer = EffectRenderer();
+  final previewBlurBases = <int, ui.Image>{};
+  ui.Image? previewImage;
+
+  try {
+    await renderer.init();
+    previewBlurBases[0] = await renderer.prepareBlurredBase(
+      source: previewSource,
+      presetLevel: 0,
+    );
+    if (kBlurPresets.length > 1) {
+      previewBlurBases[1] = await renderer.prepareBlurredBase(
+        source: previewSource,
+        presetLevel: 1,
+      );
+    }
+
+    previewImage = await renderer.render(
+      source: previewSource,
+      blurredBase: previewBlurBases[0]!,
+      originalDetailWeight: _detailWeightForBlurValue(0.0),
+      effect: DistortionEffect.original,
+      intensity: 1.0,
+    );
+
+    return EditorScreenData(
+      imagePath: image.path,
+      sourceBytes: sourceBytes,
+      previewSource: previewSource,
+      previewImage: previewImage,
+      previewBlurBases: previewBlurBases,
+      renderer: renderer,
+    );
+  } catch (_) {
+    previewImage?.dispose();
+    for (final image in previewBlurBases.values) {
+      image.dispose();
+    }
+    previewSource.dispose();
+    renderer.dispose();
+    rethrow;
+  }
+}
+
+Future<ui.Image> _decodePreviewFromBytes(Uint8List bytes) async {
+  const previewScale = 0.55;
+  const previewMaxDimension = 1400;
+
+  final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+  final descriptor = await ui.ImageDescriptor.encoded(buffer);
+
+  final sourceWidth = descriptor.width;
+  final sourceHeight = descriptor.height;
+  final longestEdge = sourceWidth > sourceHeight ? sourceWidth : sourceHeight;
+  final appliedScale = math.min(
+    previewScale,
+    previewMaxDimension / longestEdge,
+  ).clamp(0.1, 1.0);
+  final targetWidth = (sourceWidth * appliedScale).round().clamp(1, sourceWidth);
+  final targetHeight = (sourceHeight * appliedScale).round().clamp(
+    1,
+    sourceHeight,
+  );
+
+  final codec = await descriptor.instantiateCodec(
+    targetWidth: targetWidth,
+    targetHeight: targetHeight,
+  );
+  final frame = await codec.getNextFrame();
+  codec.dispose();
+  descriptor.dispose();
+  buffer.dispose();
+  return frame.image;
+}
+
+double _detailWeightForBlurValue(double blurValue) {
+  final t = blurValue.clamp(0.0, 1.0);
+  return ui.lerpDouble(0.12, 0.02, t) ?? 0.08;
+}
+
 const Map<DistortionEffect, String> kEffectPreviewAssets = {
   DistortionEffect.original: 'assets/previews/original.png',
   DistortionEffect.narrowReed: 'assets/previews/narrow_reed.png',
@@ -27,8 +128,8 @@ const Map<DistortionEffect, String> kEffectPreviewAssets = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class EditorScreen extends StatefulWidget {
-  final String imagePath;
-  const EditorScreen({super.key, required this.imagePath});
+  final EditorScreenData data;
+  const EditorScreen({super.key, required this.data});
 
   @override
   State<EditorScreen> createState() => _EditorScreenState();
@@ -36,22 +137,18 @@ class EditorScreen extends StatefulWidget {
 
 class _EditorScreenState extends State<EditorScreen> {
   static final int _blurLevels = kBlurPresets.length;
-  static const double _previewScale = 0.55; // 50-70% preview resolution
-  static const int _previewMaxDimension = 1400; // hard cap for UI rendering
   static const Duration _renderDebounceDelay = Duration(milliseconds: 66);
   static const Duration _minRenderInterval = Duration(milliseconds: 84);
-  static const Duration _minimumLoaderDuration = Duration(milliseconds: 600);
-
+  
   // ── Renderer ───────────────────────────────────────────────────────────────
-  final EffectRenderer _renderer = EffectRenderer();
+  late final EffectRenderer _renderer;
 
   // ── Source image (encoded/original for export only) ────────────────────────
-  Uint8List? _sourceBytes;
-  ui.Image? _previewSource;
+  late final Uint8List _sourceBytes;
+  late final ui.Image _previewSource;
 
   // ── Processing state ───────────────────────────────────────────────────────
   ui.Image? _previewImage;
-  bool _isEditorReady = false;
 
   // ── Controls ───────────────────────────────────────────────────────────────
   DistortionEffect _effect = DistortionEffect.original;
@@ -72,7 +169,6 @@ class _EditorScreenState extends State<EditorScreen> {
   bool _saving = false;
   bool _wallpapering = false;
   late final ImageProvider _loadingBackground;
-  late final DateTime _editorLoadStartedAt;
 
   // ─────────────────────────────────────────────────────────────────────────
   // Lifecycle
@@ -81,12 +177,12 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   void initState() {
     super.initState();
-    _loadingBackground = FileImage(File(widget.imagePath));
-    _editorLoadStartedAt = DateTime.now();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      unawaited(_bootstrap());
-    });
+    _renderer = widget.data.renderer;
+    _sourceBytes = widget.data.sourceBytes;
+    _previewSource = widget.data.previewSource;
+    _previewImage = widget.data.previewImage;
+    _previewBlurBases.addAll(widget.data.previewBlurBases);
+    _loadingBackground = FileImage(File(widget.data.imagePath));
   }
 
   @override
@@ -94,72 +190,23 @@ class _EditorScreenState extends State<EditorScreen> {
     _renderDebounceTimer?.cancel();
     _renderThrottleTimer?.cancel();
     _renderer.dispose();
-    _previewImage?.dispose();
-    _sourceBytes = null;
-    _previewSource?.dispose();
-    for (final image in _previewBlurBases.values) {
+    final disposed = <ui.Image>[];
+    void disposeImage(ui.Image? image) {
+      if (image == null) return;
+      if (disposed.any((existing) => identical(existing, image))) return;
       image.dispose();
+      disposed.add(image);
+    }
+
+    disposeImage(_previewImage);
+    disposeImage(_previewSource);
+    for (final image in _previewBlurBases.values) {
+      disposeImage(image);
     }
     super.dispose();
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Bootstrap
-  // ─────────────────────────────────────────────────────────────────────────
-
-  Future<void> _bootstrap() async {
-    // Keep original encoded bytes for export, but decode only a bounded preview.
-    final bytes = await File(widget.imagePath).readAsBytes();
-    _sourceBytes = bytes;
-    final preview = await _decodePreviewFromBytes(bytes);
-    if (!mounted) {
-      preview.dispose();
-      return;
-    }
-    setState(() {
-      _previewSource = preview;
-    });
-
-    // Heavy processing stays fully asynchronous and never blocks first paint.
-    unawaited(_bootstrapBackgroundWork());
-  }
-
-  Future<void> _bootstrapBackgroundWork() async {
-    if (_previewSource == null || !mounted) return;
-    await _renderer.init();
-
-    // Build minimum usable pipeline first: blur cache + first render.
-    await _precomputePreviewBlurLevel(0);
-    if (_blurLevels > 1) {
-      await _precomputePreviewBlurLevel(1);
-    }
-    await _runRenderNow();
-    await _markEditorReadyWhenMinimumTimeElapsed();
-
-    // Non-critical warmup and remaining blur levels continue in background.
-    unawaited(_runBackgroundPrewarm());
-    for (var level = 2; level < _blurLevels; level++) {
-      if (!mounted) return;
-      await _precomputePreviewBlurLevel(level);
-    }
-
-    if (!mounted) return;
-    // Refresh once full blur cache is ready.
-    _scheduleDebouncedRender(immediate: true);
-  }
-
-  Future<void> _markEditorReadyWhenMinimumTimeElapsed() async {
-    final elapsed = DateTime.now().difference(_editorLoadStartedAt);
-    final remaining = _minimumLoaderDuration - elapsed;
-    if (remaining > Duration.zero) {
-      await Future<void>.delayed(remaining);
-    }
-    if (!mounted) return;
-    setState(() => _isEditorReady = true);
-  }
-
   Future<void> _runRenderNow() async {
-    if (_previewSource == null) return;
     if (_renderInFlight) {
       _renderQueued = true;
       return;
@@ -168,8 +215,9 @@ class _EditorScreenState extends State<EditorScreen> {
     _lastRenderStartAt = DateTime.now();
     final generation = ++_renderGeneration;
     try {
+      await _ensurePreviewBlurLevelsForValue(_rawBlurValue);
       final rendered = await _renderInterpolatedEffect(
-        source: _previewSource!,
+        source: _previewSource,
         effect: _effect,
         blurValue: _rawBlurValue,
         blurCache: _previewBlurBases,
@@ -198,66 +246,9 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
-  Future<void> _runBackgroundPrewarm() async {
-    if (_previewSource == null) return;
-    final source = _previewSource!;
-    final base0 = _previewBlurBases[0];
-    if (base0 == null) return;
-
-    try {
-      final dummyRenderFuture = _renderer.render(
-        source: source,
-        blurredBase: base0,
-        effect: DistortionEffect.original,
-        intensity: 0.0,
-      );
-
-      await Future.wait([
-        _renderer.prewarmIsolate(),
-        _renderer.prewarmEffectMaps(
-          DistortionEffect.values.where(
-            (effect) => effect != DistortionEffect.original,
-          ),
-        ),
-      ]);
-      final dummyImage = await dummyRenderFuture;
-      dummyImage.dispose();
-    } catch (_) {
-      // Prewarm is best-effort and must never block interaction.
-    }
-  }
-
   // ─────────────────────────────────────────────────────────────────────────
   // Helpers
   // ─────────────────────────────────────────────────────────────────────────
-
-  Future<ui.Image> _decodePreviewFromBytes(Uint8List bytes) async {
-    final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
-    final descriptor = await ui.ImageDescriptor.encoded(buffer);
-
-    final sourceWidth = descriptor.width;
-    final sourceHeight = descriptor.height;
-    final longestEdge = sourceWidth > sourceHeight ? sourceWidth : sourceHeight;
-    final appliedScale = math.min(
-      _previewScale,
-      _previewMaxDimension / longestEdge,
-    ).clamp(0.1, 1.0);
-    final targetWidth = (sourceWidth * appliedScale).round().clamp(1, sourceWidth);
-    final targetHeight = (sourceHeight * appliedScale).round().clamp(
-      1,
-      sourceHeight,
-    );
-
-    final codec = await descriptor.instantiateCodec(
-      targetWidth: targetWidth,
-      targetHeight: targetHeight,
-    );
-    final frame = await codec.getNextFrame();
-    codec.dispose();
-    descriptor.dispose();
-    buffer.dispose();
-    return frame.image;
-  }
 
   Future<ui.Image> _decodeOriginalFromBytes(Uint8List bytes) async {
     final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
@@ -269,15 +260,11 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   Future<String> _exportToTemp() async {
-    final sourceBytes = _sourceBytes;
-    if (sourceBytes == null) {
-      throw StateError('Original image bytes are not available.');
-    }
     final dir = await getTemporaryDirectory();
     final outPath =
         '${dir.path}/distorto_export_${DateTime.now().millisecondsSinceEpoch}.png';
 
-    final fullResSource = await _decodeOriginalFromBytes(sourceBytes);
+    final fullResSource = await _decodeOriginalFromBytes(_sourceBytes);
     ui.Image? exportBlur;
     ui.Image? rendered;
     try {
@@ -310,9 +297,20 @@ class _EditorScreenState extends State<EditorScreen> {
   Future<void> _precomputePreviewBlurLevel(int level) async {
     if (_previewBlurBases.containsKey(level)) return;
     _previewBlurBases[level] = await _renderer.prepareBlurredBase(
-      source: _previewSource!,
+      source: _previewSource,
       presetLevel: level,
     );
+  }
+
+  Future<void> _ensurePreviewBlurLevelsForValue(double blurValue) async {
+    final steps = _blurLevels - 1;
+    final scaled = blurValue.clamp(0.0, 1.0) * steps;
+    final lowIndex = scaled.floor().clamp(0, steps);
+    final highIndex = scaled.ceil().clamp(0, steps);
+    await _precomputePreviewBlurLevel(lowIndex);
+    if (highIndex != lowIndex) {
+      await _precomputePreviewBlurLevel(highIndex);
+    }
   }
 
   ui.Image _getCachedBlurLevel(
@@ -344,11 +342,6 @@ class _EditorScreenState extends State<EditorScreen> {
     final low = _getCachedBlurLevel(cache, lowIndex, fallback);
     final high = _getCachedBlurLevel(cache, highIndex, fallback);
     return (low: low, high: high, mix: mix);
-  }
-
-  double _detailWeightForBlurValue(double blurValue) {
-    final t = blurValue.clamp(0.0, 1.0);
-    return ui.lerpDouble(0.12, 0.02, t) ?? 0.08;
   }
 
   Future<ui.Image> _renderInterpolatedEffect({
@@ -461,7 +454,7 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   Future<void> _onSave() async {
-    if (_saving || _sourceBytes == null) return;
+    if (_saving) return;
     setState(() => _saving = true);
     try {
       final path = await _exportToTemp();
@@ -495,7 +488,7 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   Future<void> _applyWallpaper(int location) async {
-    if (_wallpapering || _sourceBytes == null) return;
+    if (_wallpapering) return;
     setState(() => _wallpapering = true);
     try {
       final path = await _exportToTemp();
@@ -535,58 +528,56 @@ class _EditorScreenState extends State<EditorScreen> {
         backgroundColor: const Color(0xFF0A0A0A),
         body: Stack(
           children: [
-            if (_isEditorReady) ...[
-              // ── Full-screen image preview ──────────────────────────────
-              _PreviewPane(
-                previewImage: _previewImage ?? _previewSource,
-                initialising: _previewSource == null,
-              ),
+            // ── Full-screen image preview ──────────────────────────────
+            _PreviewPane(
+              previewImage: _previewImage ?? _previewSource,
+              initialising: false,
+            ),
 
-              // ── Top-right action buttons ───────────────────────────────
-              Positioned(
-                top: MediaQuery.of(context).padding.top + 8,
-                right: 12,
-                child: _TopActions(
-                  saving: _saving,
-                  wallpapering: _wallpapering,
-                  onSave: _onSave,
-                  onWallpaper: _onSetWallpaper,
-                ),
+            // ── Top-right action buttons ───────────────────────────────
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 8,
+              right: 12,
+              child: _TopActions(
+                saving: _saving,
+                wallpapering: _wallpapering,
+                onSave: _onSave,
+                onWallpaper: _onSetWallpaper,
               ),
+            ),
 
-              // ── Back button ────────────────────────────────────────────
-              Positioned(
-                top: MediaQuery.of(context).padding.top + 8,
-                left: 4,
-                child: IconButton(
-                  icon: const Icon(
-                    Icons.arrow_back_ios_new_rounded,
-                    color: Colors.white,
-                    size: 20,
-                  ),
-                  onPressed: () => Navigator.maybePop(context),
+            // ── Back button ────────────────────────────────────────────
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 8,
+              left: 4,
+              child: IconButton(
+                icon: const Icon(
+                  Icons.arrow_back_ios_new_rounded,
+                  color: Colors.white,
+                  size: 20,
                 ),
+                onPressed: () => Navigator.maybePop(context),
               ),
+            ),
 
-              // ── Persistent bottom sheet ────────────────────────────────
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: _BottomPanel(
-                  blurValue: _rawBlurValue,
-                  isDraggingBlur: _isBlurDragging,
-                  snappedBlurIndex: _snappedBlurIndex,
-                  blurSteps: _blurLevels - 1,
-                  selectedEffect: _effect,
-                  onBlurChanged: _onBlurChanged,
-                  onBlurChangeStart: _onBlurDragStart,
-                  onBlurChangeEnd: _onBlurDragEnd,
-                  onEffectSelected: _onEffectSelected,
-                ),
+            // ── Persistent bottom sheet ────────────────────────────────
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: _BottomPanel(
+                blurValue: _rawBlurValue,
+                isDraggingBlur: _isBlurDragging,
+                snappedBlurIndex: _snappedBlurIndex,
+                blurSteps: _blurLevels - 1,
+                selectedEffect: _effect,
+                onBlurChanged: _onBlurChanged,
+                onBlurChangeStart: _onBlurDragStart,
+                onBlurChangeEnd: _onBlurDragEnd,
+                onEffectSelected: _onEffectSelected,
               ),
-            ],
-            if (!_isEditorReady || _saving || _wallpapering)
+            ),
+            if (_saving || _wallpapering)
               Positioned.fill(
                 child: IgnorePointer(
                   ignoring: false,
