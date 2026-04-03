@@ -34,8 +34,7 @@ class _BlurParams {
     required this.height,
     required this.scaledWidth,
     required this.scaledHeight,
-    required this.primaryRadius,
-    required this.secondaryRadius,
+    required this.radius,
   });
 
   final Uint8List bytes;
@@ -43,9 +42,23 @@ class _BlurParams {
   final int height;
   final int scaledWidth;
   final int scaledHeight;
-  final int primaryRadius;
-  final int secondaryRadius;
+  final int radius;
 }
+
+class BlurPreset {
+  const BlurPreset({required this.scale, required this.radius});
+
+  final double scale;
+  final int radius;
+}
+
+const List<BlurPreset> kBlurPresets = [
+  BlurPreset(scale: 1.0, radius: 0),
+  BlurPreset(scale: 0.9, radius: 6),
+  BlurPreset(scale: 0.75, radius: 12),
+  BlurPreset(scale: 0.6, radius: 18),
+  BlurPreset(scale: 0.5, radius: 26),
+];
 
 class _RenderParams {
   const _RenderParams({
@@ -87,8 +100,9 @@ Uint8List _blurIsolate(_BlurParams p) {
     );
   }
 
-  working = img.gaussianBlur(working, radius: p.primaryRadius);
-  working = img.gaussianBlur(working, radius: p.secondaryRadius);
+  if (p.radius > 0) {
+    working = img.gaussianBlur(working, radius: p.radius);
+  }
 
   if (working.width != p.width || working.height != p.height) {
     working = img.copyResize(
@@ -110,6 +124,8 @@ double _smoothstep(double edge0, double edge1, double x) {
 }
 
 double _mix(double a, double b, double t) => a + (b - a) * t;
+
+int _noopIsolate(int value) => value;
 
 class _EffectMap {
   const _EffectMap({
@@ -357,6 +373,16 @@ class EffectRenderer {
 
   Future<void> init() async {}
 
+  Future<void> prewarmIsolate() async {
+    await compute(_noopIsolate, 1);
+  }
+
+  Future<void> prewarmEffectMaps(Iterable<DistortionEffect> effects) async {
+    for (final effect in effects) {
+      _effectMapFor(effect);
+    }
+  }
+
   Future<ui.Image> render({
     required ui.Image source,
     required ui.Image blurredBase,
@@ -413,29 +439,29 @@ class EffectRenderer {
 
   Future<ui.Image> prepareBlurredBase({
     required ui.Image source,
-    required double blurValue,
+    required int presetLevel,
   }) async {
-    final sliderValue = _clamp01(blurValue);
-    if (sliderValue <= 0.0) {
+    final level = presetLevel.clamp(0, kBlurPresets.length - 1);
+    final preset = kBlurPresets[level];
+    if (preset.radius <= 0 && preset.scale >= 1.0) {
       return _copyImage(source);
     }
-    return _applyBlur(image: source, sliderValue: sliderValue);
+    return _applyBlur(
+      image: source,
+      scale: preset.scale,
+      radius: preset.radius,
+    );
   }
 
   Future<ui.Image> _applyBlur({
     required ui.Image image,
-    required double sliderValue,
+    required double scale,
+    required int radius,
   }) async {
     final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
     if (byteData == null) {
       return _copyImage(image);
     }
-
-    final mapped = math.pow(_clamp01(sliderValue), 1.6).toDouble();
-    final radius = 4.0 + mapped * 20.0;
-    final scale = 1.0 - mapped * 0.18;
-    final primaryRadius = (radius * 0.65).round().clamp(1, 64);
-    final secondaryRadius = (radius * 0.35).round().clamp(1, 64);
 
     final bytes = await compute(
       _blurIsolate,
@@ -443,10 +469,15 @@ class EffectRenderer {
         bytes: byteData.buffer.asUint8List(),
         width: image.width,
         height: image.height,
-        scaledWidth: (image.width * scale).round().clamp(1, image.width),
-        scaledHeight: (image.height * scale).round().clamp(1, image.height),
-        primaryRadius: primaryRadius,
-        secondaryRadius: secondaryRadius,
+        scaledWidth: (image.width * scale.clamp(0.1, 1.0)).round().clamp(
+          1,
+          image.width,
+        ),
+        scaledHeight: (image.height * scale.clamp(0.1, 1.0)).round().clamp(
+          1,
+          image.height,
+        ),
+        radius: radius.clamp(0, 128),
       ),
     );
 

@@ -23,11 +23,14 @@ class EditorScreen extends StatefulWidget {
 }
 
 class _EditorScreenState extends State<EditorScreen> {
+  static final int _blurLevels = kBlurPresets.length;
+
   // ── Renderer ───────────────────────────────────────────────────────────────
   final EffectRenderer _renderer = EffectRenderer();
 
   // ── Source image (full-res, never mutated) ─────────────────────────────────
   ui.Image? _sourceImage;
+  ui.Image? _previewSource;
 
   // ── Processing state ───────────────────────────────────────────────────────
   ui.Image? _previewImage;
@@ -43,6 +46,7 @@ class _EditorScreenState extends State<EditorScreen> {
   final Map<DistortionEffect, ui.Image?> _thumbs = {};
   ui.Image? _thumbSource; // downscaled source for thumbnail rendering
   final Map<int, ui.Image> _previewBlurBases = {};
+  final Map<int, ui.Image> _exportBlurBases = {};
   final Map<int, ui.Image> _thumbBlurBases = {};
   Timer? _blurDebounceTimer;
   int _renderGeneration = 0;
@@ -67,6 +71,7 @@ class _EditorScreenState extends State<EditorScreen> {
     _renderer.dispose();
     _previewImage?.dispose();
     _sourceImage?.dispose();
+    _previewSource?.dispose();
     _thumbSource?.dispose();
     for (final t in _thumbs.values) {
       t?.dispose();
@@ -75,6 +80,9 @@ class _EditorScreenState extends State<EditorScreen> {
       image.dispose();
     }
     for (final image in _thumbBlurBases.values) {
+      image.dispose();
+    }
+    for (final image in _exportBlurBases.values) {
       image.dispose();
     }
     super.dispose();
@@ -97,20 +105,31 @@ class _EditorScreenState extends State<EditorScreen> {
     // Initialize renderer.
     await _renderer.init();
 
-    // Build a downscaled copy for thumbnail rendering (~200px wide).
+    // Build downscaled copies for interactive preview and thumbnails.
+    final previewWidth = (_sourceImage!.width * 0.6).round().clamp(
+      1,
+      _sourceImage!.width,
+    );
+    _previewSource = await _downscale(_sourceImage!, targetWidth: previewWidth);
     _thumbSource = await _downscale(_sourceImage!, targetWidth: 200);
     _previewBlurBases[0] = await _renderer.prepareBlurredBase(
+      source: _previewSource!,
+      presetLevel: 0,
+    );
+    _exportBlurBases[0] = await _renderer.prepareBlurredBase(
       source: _sourceImage!,
-      blurValue: 0.0,
+      presetLevel: 0,
     );
     _thumbBlurBases[0] = await _renderer.prepareBlurredBase(
       source: _thumbSource!,
-      blurValue: 0.0,
+      presetLevel: 0,
     );
 
-    // Kick off thumbnail generation for all effects (non-blocking fire-and-forget).
+    // Kick off warm-up work in background without blocking first frame.
+    unawaited(_runBackgroundPrewarm());
+
+    // Kick off thumbnail generation in background.
     _generateThumbnails();
-    _warmBlurCaches();
 
     await _rerender();
 
@@ -118,21 +137,15 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   Future<void> _rerender() async {
-    if (_sourceImage == null) return;
+    if (_previewSource == null) return;
     final generation = ++_renderGeneration;
-    ui.Image? transientBlurBase;
     try {
-      final blurBaseResult = await _getPreviewEffectBase(_blurValue);
-      final blurredBase = blurBaseResult.image;
-      transientBlurBase = blurBaseResult.transient ? blurredBase : null;
-      final rendered = await _renderer.render(
-        source: _sourceImage!,
-        blurredBase: blurredBase,
+      final rendered = await _renderInterpolatedEffect(
+        source: _previewSource!,
         effect: _effect,
-        intensity: 1.0,
+        blurValue: _blurValue,
+        blurCache: _previewBlurBases,
       );
-      transientBlurBase?.dispose();
-      transientBlurBase = null;
       if (!mounted) {
         rendered.dispose();
         return;
@@ -146,7 +159,6 @@ class _EditorScreenState extends State<EditorScreen> {
         _previewImage = rendered;
       });
     } catch (e) {
-      transientBlurBase?.dispose();
       if (!mounted) return;
       _showSnack('Effect render failed: $e');
     }
@@ -160,7 +172,11 @@ class _EditorScreenState extends State<EditorScreen> {
     if (_thumbSource == null) return;
     for (final effect in DistortionEffect.values) {
       if (!mounted) return;
-      final blurredBase = await _getThumbEffectBase(0.0);
+      final blurredBase = _getCachedBlurLevel(
+        _thumbBlurBases,
+        0,
+        _thumbSource!,
+      );
       final thumb = await _renderer.render(
         source: _thumbSource!,
         blurredBase: blurredBase,
@@ -177,12 +193,42 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   Future<void> _warmBlurCaches() async {
-    if (_sourceImage == null || _thumbSource == null) return;
-    for (final rawValue in [0.25, 0.5, 0.75, 1.0]) {
-      if (!mounted) return;
-      final eased = Curves.easeOutCubic.transform(rawValue);
-      await _getPreviewBlurBaseForKey(_blurCacheKey(eased));
-      await _getThumbBlurBaseForKey(_blurCacheKey(eased));
+    if (_previewSource == null || _sourceImage == null) return;
+    for (var level = 0; level < _blurLevels; level++) {
+      await Future.wait([
+        _precomputePreviewBlurLevel(level),
+        _precomputeExportBlurLevel(level),
+      ]);
+    }
+  }
+
+  Future<void> _runBackgroundPrewarm() async {
+    if (_sourceImage == null) return;
+    final source = _sourceImage!;
+    final base0 = _exportBlurBases[0];
+    if (base0 == null) return;
+
+    try {
+      final dummyRenderFuture = _renderer.render(
+        source: source,
+        blurredBase: base0,
+        effect: DistortionEffect.original,
+        intensity: 0.0,
+      );
+
+      await Future.wait([
+        _warmBlurCaches(),
+        _renderer.prewarmIsolate(),
+        _renderer.prewarmEffectMaps(
+          DistortionEffect.values.where(
+            (effect) => effect != DistortionEffect.original,
+          ),
+        ),
+      ]);
+      final dummyImage = await dummyRenderFuture;
+      dummyImage.dispose();
+    } catch (_) {
+      // Prewarm is best-effort and must never block interaction.
     }
   }
 
@@ -209,69 +255,88 @@ class _EditorScreenState extends State<EditorScreen> {
     final dir = await getTemporaryDirectory();
     final outPath =
         '${dir.path}/distorto_export_${DateTime.now().millisecondsSinceEpoch}.png';
-    final blurBaseResult = await _getPreviewEffectBase(_blurValue);
-    final blurredBase = blurBaseResult.image;
-    final rendered = await _renderer.render(
+    final rendered = await _renderInterpolatedEffect(
       source: _sourceImage!,
-      blurredBase: blurredBase,
       effect: _effect,
-      intensity: 1.0,
+      blurValue: _blurValue,
+      blurCache: _exportBlurBases,
     );
-    if (blurBaseResult.transient) {
-      blurredBase.dispose();
-    }
     final byteData = await rendered.toByteData(format: ui.ImageByteFormat.png);
     rendered.dispose();
     await File(outPath).writeAsBytes(byteData!.buffer.asUint8List());
     return outPath;
   }
 
-  int _blurCacheKey(double value) => (value.clamp(0.0, 1.0) * 100).round();
+  Future<void> _precomputePreviewBlurLevel(int level) async {
+    if (_previewBlurBases.containsKey(level)) return;
+    _previewBlurBases[level] = await _renderer.prepareBlurredBase(
+      source: _previewSource!,
+      presetLevel: level,
+    );
+  }
 
-  Future<ui.Image> _getPreviewBlurBaseForKey(int key) async {
-    final cached = _previewBlurBases[key];
-    if (cached != null) return cached;
-
-    final image = await _renderer.prepareBlurredBase(
+  Future<void> _precomputeExportBlurLevel(int level) async {
+    if (_exportBlurBases.containsKey(level)) return;
+    _exportBlurBases[level] = await _renderer.prepareBlurredBase(
       source: _sourceImage!,
-      blurValue: key / 100.0,
+      presetLevel: level,
     );
-    _previewBlurBases[key] = image;
-    return image;
   }
 
-  Future<ui.Image> _getThumbBlurBaseForKey(int key) async {
-    final cached = _thumbBlurBases[key];
-    if (cached != null) return cached;
-
-    final image = await _renderer.prepareBlurredBase(
-      source: _thumbSource!,
-      blurValue: key / 100.0,
-    );
-    _thumbBlurBases[key] = image;
-    return image;
+  ({int lower, int upper, double t}) _resolveBlurLevels(double sliderValue) {
+    final scaled = sliderValue.clamp(0.0, 1.0) * (_blurLevels - 1);
+    final lower = scaled.floor().clamp(0, _blurLevels - 1);
+    final upper = scaled.ceil().clamp(0, _blurLevels - 1);
+    final t = scaled - lower;
+    return (lower: lower, upper: upper, t: t);
   }
 
-  Future<({ui.Image image, bool transient})> _getPreviewEffectBase(
-    double blurValue,
-  ) async {
-    final eased = Curves.easeOutCubic.transform(blurValue.clamp(0.0, 1.0));
-    final position = eased * 100.0;
-    final lowKey = position.floor().clamp(0, 100);
-    final highKey = position.ceil().clamp(0, 100);
-    final t = position - lowKey;
-    final low = await _getPreviewBlurBaseForKey(lowKey);
-    if (highKey == lowKey || t <= 0.0001) {
-      return (image: low, transient: false);
+  ui.Image _getCachedBlurLevel(
+    Map<int, ui.Image> cache,
+    int level,
+    ui.Image fallback,
+  ) {
+    final exact = cache[level];
+    if (exact != null) return exact;
+    for (var i = 0; i < _blurLevels; i++) {
+      final down = cache[level - i];
+      if (down != null) return down;
+      final up = cache[level + i];
+      if (up != null) return up;
     }
-    final high = await _getPreviewBlurBaseForKey(highKey);
-    final interpolated = await _lerpImage(low, high, t);
-    return (image: interpolated, transient: true);
+    return fallback;
   }
 
-  Future<ui.Image> _getThumbEffectBase(double blurValue) async {
-    final eased = Curves.easeOutCubic.transform(blurValue.clamp(0.0, 1.0));
-    return _getThumbBlurBaseForKey(_blurCacheKey(eased));
+  Future<ui.Image> _renderInterpolatedEffect({
+    required ui.Image source,
+    required DistortionEffect effect,
+    required double blurValue,
+    required Map<int, ui.Image> blurCache,
+  }) async {
+    final levels = _resolveBlurLevels(blurValue);
+    final blurA = _getCachedBlurLevel(blurCache, levels.lower, source);
+    final renderA = await _renderer.render(
+      source: source,
+      blurredBase: blurA,
+      effect: effect,
+      intensity: 1.0,
+    );
+
+    if (levels.upper == levels.lower || levels.t <= 0.0001) {
+      return renderA;
+    }
+
+    final blurB = _getCachedBlurLevel(blurCache, levels.upper, source);
+    final renderB = await _renderer.render(
+      source: source,
+      blurredBase: blurB,
+      effect: effect,
+      intensity: 1.0,
+    );
+    final blended = await _lerpImage(renderA, renderB, levels.t);
+    renderA.dispose();
+    renderB.dispose();
+    return blended;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -287,7 +352,9 @@ class _EditorScreenState extends State<EditorScreen> {
   void _onBlurChanged(double value) {
     final clamped = value.clamp(0.0, 1.0);
     if ((_blurValue - clamped).abs() < 0.0001) return;
-    setState(() => _blurValue = clamped);
+    setState(() {
+      _blurValue = clamped;
+    });
     _scheduleDebouncedRender();
   }
 
