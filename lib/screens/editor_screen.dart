@@ -632,7 +632,7 @@ class _BlurSection extends StatelessWidget {
               ),
               const Spacer(),
               Text(
-                blurLevel == 0 ? 'Off' : '$blurLevel',
+                '${(blurLevel.clamp(0, 4) * 25)}%',
                 style: const TextStyle(color: Color(0xFF888888), fontSize: 12),
               ),
             ],

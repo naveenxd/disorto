@@ -34,7 +34,8 @@ class _BlurParams {
     required this.height,
     required this.scaledWidth,
     required this.scaledHeight,
-    required this.radius,
+    required this.primaryRadius,
+    required this.secondaryRadius,
   });
 
   final Uint8List bytes;
@@ -42,7 +43,8 @@ class _BlurParams {
   final int height;
   final int scaledWidth;
   final int scaledHeight;
-  final int radius;
+  final int primaryRadius;
+  final int secondaryRadius;
 }
 
 class _RenderParams {
@@ -85,7 +87,8 @@ Uint8List _blurIsolate(_BlurParams p) {
     );
   }
 
-  working = img.gaussianBlur(working, radius: p.radius);
+  working = img.gaussianBlur(working, radius: p.primaryRadius);
+  working = img.gaussianBlur(working, radius: p.secondaryRadius);
 
   if (working.width != p.width || working.height != p.height) {
     working = img.copyResize(
@@ -356,7 +359,7 @@ class EffectRenderer {
 
   Future<ui.Image> render({
     required ui.Image source,
-    ui.Image? blurredBase,
+    required ui.Image blurredBase,
     required DistortionEffect effect,
     double intensity = 1.0,
   }) async {
@@ -373,8 +376,7 @@ class EffectRenderer {
         return _copyImage(source);
       }
 
-      final blurImage = blurredBase ?? source;
-      final blurData = await blurImage.toByteData(
+      final blurData = await blurredBase.toByteData(
         format: ui.ImageByteFormat.rawRgba,
       );
       if (blurData == null) {
@@ -405,7 +407,7 @@ class EffectRenderer {
 
       return _decodeRgba(bytes, source.width, source.height);
     } catch (_) {
-      return _copyImage(blurredBase ?? source);
+      return _copyImage(blurredBase);
     }
   }
 
@@ -413,33 +415,27 @@ class EffectRenderer {
     required ui.Image source,
     required int blurLevel,
   }) async {
-    if (blurLevel <= 0) {
+    final sliderValue = (blurLevel.clamp(0, 4) / 4.0).toDouble();
+    if (sliderValue <= 0.0) {
       return _copyImage(source);
     }
-    return _applyBlur(image: source, blurLevel: blurLevel);
+    return _applyBlur(image: source, sliderValue: sliderValue);
   }
 
   Future<ui.Image> _applyBlur({
     required ui.Image image,
-    required int blurLevel,
+    required double sliderValue,
   }) async {
     final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
     if (byteData == null) {
       return _copyImage(image);
     }
 
-    final scale = switch (blurLevel) {
-      1 => 0.90,
-      2 => 0.75,
-      3 => 0.65,
-      _ => 0.55,
-    };
-    final radius = switch (blurLevel) {
-      1 => 6,
-      2 => 10,
-      3 => 14,
-      _ => 18,
-    };
+    final mapped = math.pow(_clamp01(sliderValue), 1.6).toDouble();
+    final radius = 4.0 + mapped * 20.0;
+    final scale = 1.0 - mapped * 0.18;
+    final primaryRadius = (radius * 0.65).round().clamp(1, 64);
+    final secondaryRadius = (radius * 0.35).round().clamp(1, 64);
 
     final bytes = await compute(
       _blurIsolate,
@@ -449,7 +445,8 @@ class EffectRenderer {
         height: image.height,
         scaledWidth: (image.width * scale).round().clamp(1, image.width),
         scaledHeight: (image.height * scale).round().clamp(1, image.height),
-        radius: radius,
+        primaryRadius: primaryRadius,
+        secondaryRadius: secondaryRadius,
       ),
     );
 
