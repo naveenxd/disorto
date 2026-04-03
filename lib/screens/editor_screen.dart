@@ -21,8 +21,7 @@ class EditorScreen extends StatefulWidget {
   State<EditorScreen> createState() => _EditorScreenState();
 }
 
-class _EditorScreenState extends State<EditorScreen>
-    with SingleTickerProviderStateMixin {
+class _EditorScreenState extends State<EditorScreen> {
   // ── Renderer ───────────────────────────────────────────────────────────────
   final EffectRenderer _renderer = EffectRenderer();
   final ShaderProgramCache _shaderProgramCache = ShaderProgramCache();
@@ -50,7 +49,6 @@ class _EditorScreenState extends State<EditorScreen>
   // ── Saving state ──────────────────────────────────────────────────────────
   bool _saving = false;
   bool _wallpapering = false;
-  late final AnimationController _timeController;
 
   // ─────────────────────────────────────────────────────────────────────────
   // Lifecycle
@@ -59,10 +57,6 @@ class _EditorScreenState extends State<EditorScreen>
   @override
   void initState() {
     super.initState();
-    _timeController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 24),
-    )..repeat();
     _bootstrap();
   }
 
@@ -70,7 +64,6 @@ class _EditorScreenState extends State<EditorScreen>
   void dispose() {
     _renderer.dispose();
     _shaderProgramCache.dispose();
-    _timeController.dispose();
     _sourceImage?.dispose();
     _thumbSource?.dispose();
     for (final t in _thumbs.values) {
@@ -360,7 +353,6 @@ class _EditorScreenState extends State<EditorScreen>
               blurImage: _previewBlurImage,
               effect: _effect,
               shader: _previewShader,
-              animation: _timeController,
               initialising: _initialising,
               rendering: _rendering,
             ),
@@ -420,7 +412,6 @@ class _PreviewPane extends StatelessWidget {
   final ui.Image? blurImage;
   final DistortionEffect effect;
   final ui.FragmentShader? shader;
-  final Animation<double> animation;
   final bool initialising;
   final bool rendering;
 
@@ -429,7 +420,6 @@ class _PreviewPane extends StatelessWidget {
     required this.blurImage,
     required this.effect,
     required this.shader,
-    required this.animation,
     required this.initialising,
     required this.rendering,
   });
@@ -450,7 +440,6 @@ class _PreviewPane extends StatelessWidget {
                 blurImage: blurImage!,
                 effect: effect,
                 shader: shader,
-                animation: animation,
               )
             : const _LoadingPlaceholder(key: ValueKey('blank')),
       ),
@@ -463,7 +452,6 @@ class _ImageDisplay extends StatelessWidget {
   final ui.Image blurImage;
   final DistortionEffect effect;
   final ui.FragmentShader? shader;
-  final Animation<double> animation;
 
   const _ImageDisplay({
     super.key,
@@ -471,7 +459,6 @@ class _ImageDisplay extends StatelessWidget {
     required this.blurImage,
     required this.effect,
     required this.shader,
-    required this.animation,
   });
 
   @override
@@ -490,8 +477,6 @@ class _ImageDisplay extends StatelessWidget {
                 effect: effect,
                 intensity: 1.0,
                 shader: shader,
-                repaint: animation,
-                animation: animation,
               ),
             ),
           ),
@@ -508,23 +493,19 @@ class _ShaderPreviewPainter extends CustomPainter {
     required this.effect,
     required this.intensity,
     required this.shader,
-    required this.repaint,
-    required this.animation,
-  }) : super(repaint: repaint);
+  });
 
   final ui.Image sourceImage;
   final ui.Image blurImage;
   final DistortionEffect effect;
   final double intensity;
   final ui.FragmentShader? shader;
-  final Listenable repaint;
-  final Animation<double> animation;
 
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
     final activeShader = shader;
-    final timeSeconds = animation.value * 24.0;
+    const timeSeconds = 0.0;
 
     if (effect == DistortionEffect.original || activeShader == null) {
       paintImage(
@@ -553,8 +534,7 @@ class _ShaderPreviewPainter extends CustomPainter {
         oldDelegate.blurImage != blurImage ||
         oldDelegate.effect != effect ||
         oldDelegate.intensity != intensity ||
-        oldDelegate.shader != shader ||
-        oldDelegate.animation != animation;
+        oldDelegate.shader != shader;
   }
 }
 
