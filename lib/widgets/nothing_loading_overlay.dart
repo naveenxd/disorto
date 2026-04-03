@@ -11,6 +11,7 @@ class NothingLoadingOverlay extends StatefulWidget {
   final double frequency;
   final double speed;
   final double phaseOffset;
+  final double waveFalloff;
 
   const NothingLoadingOverlay({
     super.key,
@@ -21,6 +22,7 @@ class NothingLoadingOverlay extends StatefulWidget {
     this.frequency = 0.015,
     this.speed = 6.0,
     this.phaseOffset = 0.02,
+    this.waveFalloff = 0.000035,
   });
 
   @override
@@ -44,6 +46,7 @@ class _NothingLoadingOverlayState extends State<NothingLoadingOverlay>
       frequency: widget.frequency,
       speed: widget.speed,
       phaseOffset: widget.phaseOffset,
+      waveFalloff: widget.waveFalloff,
     );
   }
 
@@ -88,6 +91,7 @@ class _NothingDotGridPainter extends CustomPainter {
   final double frequency;
   final double speed;
   final double phaseOffset;
+  final double waveFalloff;
 
   final Paint _dotPaint = Paint()
     ..isAntiAlias = true
@@ -103,6 +107,7 @@ class _NothingDotGridPainter extends CustomPainter {
     required this.frequency,
     required this.speed,
     required this.phaseOffset,
+    required this.waveFalloff,
   }) : super(repaint: progress);
 
   @override
@@ -115,19 +120,15 @@ class _NothingDotGridPainter extends CustomPainter {
     final double time = progress.value;
     final double radius = dotDiameter * 0.5;
     final double height = size.height;
+    final double waveFront = height * (1.0 - time);
 
     for (int i = 0; i < _dots.length; i++) {
       final Offset dot = _dots[i];
       final double yFromBottom = height - dot.dy;
+      final double dist = yFromBottom - waveFront;
+      final double wave = math.exp(-(dist * dist) * waveFalloff);
 
-      final double flow = math.sin((yFromBottom * frequency) - (time * speed));
-      final double pulse = math.sin(
-        (time * (math.pi * 2.0)) + (yFromBottom * phaseOffset),
-      );
-
-      double opacity = 0.15 + (flow * 0.5) + (pulse * 0.3);
-      if (opacity < 0.0) opacity = 0.0;
-      if (opacity > 1.0) opacity = 1.0;
+      double opacity = 0.08 + (wave * 0.82);
 
       final double verticalFade = 0.78 + ((dot.dy / height) * 0.34);
       opacity *= verticalFade;
