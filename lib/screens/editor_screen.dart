@@ -104,28 +104,40 @@ class _EditorScreenState extends State<EditorScreen> {
     final bytes = await File(widget.imagePath).readAsBytes();
     _sourceBytes = bytes;
     final preview = await _decodePreviewFromBytes(bytes);
-    _previewSource = preview;
+    if (!mounted) {
+      preview.dispose();
+      return;
+    }
+    setState(() {
+      _previewSource = preview;
+      _initialising = false;
+    });
 
-    // Initialize renderer.
+    // Heavy processing stays fully asynchronous and never blocks first paint.
+    unawaited(_bootstrapBackgroundWork());
+  }
+
+  Future<void> _bootstrapBackgroundWork() async {
+    if (_previewSource == null || !mounted) return;
     await _renderer.init();
 
-    // Build downscaled copy for thumbnail rendering from preview source.
-    _thumbSource = await _downscale(_previewSource!, targetWidth: 200);
-    await _precomputeAllPreviewBlurLevels();
-    _thumbBlurBases[0] = await _renderer.prepareBlurredBase(
-      source: _thumbSource!,
-      presetLevel: 0,
-    );
+    // Start with an immediate render pass using whatever cache is available.
+    _scheduleDebouncedRender(immediate: true);
 
-    // Kick off warm-up work in background without blocking first frame.
+    // Blur cache generation (background): level 0 first, then the rest.
+    await _precomputePreviewBlurLevel(0);
     unawaited(_runBackgroundPrewarm());
+    for (var level = 1; level < _blurLevels; level++) {
+      if (!mounted) return;
+      await _precomputePreviewBlurLevel(level);
+    }
 
-    // Kick off thumbnail generation in background.
-    _generateThumbnails();
+    if (!mounted) return;
+    // Refresh once full blur cache is ready.
+    _scheduleDebouncedRender(immediate: true);
 
-    await _runRenderNow();
-
-    if (mounted) setState(() => _initialising = false);
+    // Thumbnails are non-critical: build lazily in background.
+    unawaited(_prepareThumbPipeline());
   }
 
   Future<void> _runRenderNow() async {
@@ -334,10 +346,22 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  Future<void> _precomputeAllPreviewBlurLevels() async {
-    for (var level = 0; level < _blurLevels; level++) {
-      await _precomputePreviewBlurLevel(level);
+  Future<void> _prepareThumbPipeline() async {
+    final source = _previewSource;
+    if (source == null || !mounted) return;
+    final thumb = await _downscale(source, targetWidth: 200);
+    if (!mounted) {
+      thumb.dispose();
+      return;
     }
+    _thumbSource?.dispose();
+    _thumbSource = thumb;
+    _thumbBlurBases[0]?.dispose();
+    _thumbBlurBases[0] = await _renderer.prepareBlurredBase(
+      source: _thumbSource!,
+      presetLevel: 0,
+    );
+    await _generateThumbnails();
   }
 
   ui.Image _getCachedBlurLevel(
@@ -562,7 +586,7 @@ class _EditorScreenState extends State<EditorScreen> {
           children: [
             // ── Full-screen image preview ────────────────────────────────
             _PreviewPane(
-              previewImage: _previewImage,
+              previewImage: _previewImage ?? _previewSource,
               initialising: _initialising,
             ),
 

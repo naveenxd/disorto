@@ -414,7 +414,7 @@ Uint8List _blendIsolate(_BlendParams p) {
 }
 
 class EffectRenderer {
-  final Map<DistortionEffect, _EffectMap> _effectMaps = {};
+  final Map<DistortionEffect, Future<_EffectMap>> _effectMapFutures = {};
 
   Future<void> init() async {}
 
@@ -423,9 +423,7 @@ class EffectRenderer {
   }
 
   Future<void> prewarmEffectMaps(Iterable<DistortionEffect> effects) async {
-    for (final effect in effects) {
-      _effectMapFor(effect);
-    }
+    await Future.wait(effects.map(_effectMapForAsync));
   }
 
   Future<ui.Image> render({
@@ -499,6 +497,7 @@ class EffectRenderer {
         );
       }
 
+      final map = await _effectMapForAsync(effect);
       final bytes = await compute(
         _renderEffectIsolate,
         _RenderParams(
@@ -509,9 +508,9 @@ class EffectRenderer {
           width: source.width,
           height: source.height,
           intensity: intensity,
-          mapWidth: _effectMapFor(effect).width,
-          mapHeight: _effectMapFor(effect).height,
-          mapData: _effectMapFor(effect).data,
+          mapWidth: map.width,
+          mapHeight: map.height,
+          mapData: map.data,
           originalDetailWeight: originalDetailWeight.clamp(0.0, 1.0),
         ),
       );
@@ -611,8 +610,11 @@ class EffectRenderer {
 
   void dispose() {}
 
-  _EffectMap _effectMapFor(DistortionEffect effect) {
-    return _effectMaps.putIfAbsent(effect, () => _generateEffectMap(effect));
+  Future<_EffectMap> _effectMapForAsync(DistortionEffect effect) {
+    return _effectMapFutures.putIfAbsent(
+      effect,
+      () => compute(_generateEffectMap, effect),
+    );
   }
 }
 
