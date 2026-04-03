@@ -820,6 +820,8 @@ class _BlurSection extends StatelessWidget {
           _BlurSlider(
             value: blurValue,
             isDragging: isDragging,
+            snappedIndex: snappedBlurIndex,
+            steps: blurSteps,
             onChanged: onChanged,
             onChangeStart: onChangeStart,
             onChangeEnd: onChangeEnd,
@@ -833,6 +835,8 @@ class _BlurSection extends StatelessWidget {
 class _BlurSlider extends StatefulWidget {
   final double value;
   final bool isDragging;
+  final int snappedIndex;
+  final int steps;
   final ValueChanged<double> onChanged;
   final ValueChanged<double> onChangeStart;
   final ValueChanged<double> onChangeEnd;
@@ -840,6 +844,8 @@ class _BlurSlider extends StatefulWidget {
   const _BlurSlider({
     required this.value,
     required this.isDragging,
+    required this.snappedIndex,
+    required this.steps,
     required this.onChanged,
     required this.onChangeStart,
     required this.onChangeEnd,
@@ -902,7 +908,7 @@ class _BlurSliderState extends State<_BlurSlider> {
   Widget build(BuildContext context) {
     final value = widget.value.clamp(0.0, 1.0);
     final isDragging = widget.isDragging;
-    final duration = Duration(milliseconds: isDragging ? 120 : 170);
+    const duration = Duration(milliseconds: 140);
     _animatedValue = isDragging ? value : _animatedValue;
 
     return SizedBox(
@@ -927,10 +933,18 @@ class _BlurSliderState extends State<_BlurSlider> {
                 if (!isDragging) {
                   _animatedValue = visualValue;
                 }
-                final thumbDiameter = isDragging ? 16.0 : 14.0;
-                final trackHeight = isDragging ? 3.0 : 2.0;
+                final thumbDiameter = isDragging ? 17.0 : 15.0;
+                final trackHeight = isDragging ? 4.0 : 3.0;
                 final activeWidth = trackWidth * visualValue;
                 final thumbLeft = activeWidth - thumbDiameter / 2;
+                final dotCount = widget.steps + 1;
+                final dotSize = isDragging ? 8.0 : 7.0;
+                final activeDotIndex = isDragging
+                    ? (visualValue * widget.steps).round().clamp(
+                        0,
+                        widget.steps,
+                      )
+                    : widget.snappedIndex.clamp(0, widget.steps);
 
                 return Stack(
                   alignment: Alignment.centerLeft,
@@ -956,6 +970,24 @@ class _BlurSliderState extends State<_BlurSlider> {
                         borderRadius: BorderRadius.circular(999),
                       ),
                     ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: List.generate(dotCount, (i) {
+                        final active = i <= activeDotIndex;
+                        return AnimatedContainer(
+                          duration: duration,
+                          curve: Curves.easeOutCubic,
+                          width: dotSize,
+                          height: dotSize,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: active
+                                ? Colors.white.withAlpha(188)
+                                : Colors.white.withAlpha(68),
+                          ),
+                        );
+                      }),
+                    ),
                     AnimatedPositioned(
                       duration: duration,
                       curve: Curves.easeOutCubic,
@@ -964,7 +996,7 @@ class _BlurSliderState extends State<_BlurSlider> {
                         trackWidth - thumbDiameter / 2,
                       ),
                       child: AnimatedScale(
-                        duration: duration,
+                        duration: const Duration(milliseconds: 100),
                         curve: Curves.easeOutCubic,
                         scale: isDragging ? 1.15 : 1.0,
                         child: AnimatedContainer(
@@ -982,12 +1014,12 @@ class _BlurSliderState extends State<_BlurSlider> {
                                 color: Colors.white.withAlpha(
                                   isDragging ? 125 : 65,
                                 ),
-                                blurRadius: isDragging ? 16 : 10,
+                                blurRadius: isDragging ? 10 : 7,
                                 spreadRadius: isDragging ? 1.2 : 0.4,
                               ),
                               BoxShadow(
                                 color: Colors.black.withAlpha(120),
-                                blurRadius: 6,
+                                blurRadius: 8,
                                 offset: const Offset(0, 2),
                               ),
                             ],
