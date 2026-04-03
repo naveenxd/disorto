@@ -14,24 +14,28 @@ out vec4 fragColor;
 
 void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
-    uv.x += sin(uv.y * 5.0 + uTime * 0.6) * 0.012 * uIntensity;
-    float noise = fract(sin(dot((uv + vec2(uTime * 0.008, uTime * 0.011)) * 100.0, vec2(12.9898, 78.233))) * 43758.5453);
-    uv += (noise - 0.5) * 0.002;
-
+    // Straight thin strips
     float count = 10.0;
     float bar = fract(uv.x * count);
     float normal = (bar - 0.5) * 2.0;
-    float mask = pow(max(1.0 - abs(normal), 0.0), 4.0);
-    float rise = pow(uv.y, 1.6);
-
+    // Very high power = extremely thin sharp lines
+    float mask = pow(max(1.0 - abs(normal), 0.0), 50.0);
+    
+    // Wider visible strip area with sharp core
+    float stripWidth = 1;
+    float stripInfluence = smoothstep(stripWidth, 0.0, abs(normal));
+    
     vec2 refractedUv = clamp(
         vec2(
-            uv.x + sin(uv.y * 9.0 + uTime * 1.1) * 0.016 * uIntensity,
-            uv.y - mask * rise * 0.048 * uIntensity
+            uv.x,
+            uv.y - mask * 0.1 * uIntensity
         ),
         0.0,
         1.0
     );
+    
+    // Only apply refraction within strip influence zone
+    refractedUv = mix(uv, refractedUv, stripInfluence * uIntensity);
 
     vec3 base = texture(uSourceTexture, uv).rgb;
     vec3 glass = texture(uBlurTexture, refractedUv).rgb;
