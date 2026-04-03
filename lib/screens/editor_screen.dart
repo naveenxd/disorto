@@ -12,6 +12,16 @@ import '../services/image_export_service.dart';
 import '../services/wallpaper_service.dart';
 import '../widgets/nothing_loading_overlay.dart';
 
+const Map<DistortionEffect, String> kEffectPreviewAssets = {
+  DistortionEffect.original: 'assets/previews/original.png',
+  DistortionEffect.narrowReed: 'assets/previews/narrow_reed.png',
+  DistortionEffect.wideReed: 'assets/previews/wide_reed.png',
+  DistortionEffect.lumina: 'assets/previews/lumina.png',
+  DistortionEffect.grid: 'assets/previews/grid.png',
+  DistortionEffect.liquid: 'assets/previews/liquid.png',
+  DistortionEffect.ripple: 'assets/previews/ripple.png',
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // EditorScreen
 // ─────────────────────────────────────────────────────────────────────────────
@@ -49,12 +59,8 @@ class _EditorScreenState extends State<EditorScreen> {
   int _snappedBlurIndex = 0; // actual blur preset index
   bool _isBlurDragging = false;
 
-  // ── Thumbnail cache ────────────────────────────────────────────────────────
-  // Keyed by DistortionEffect; generated at load time from a downscaled source.
-  final Map<DistortionEffect, ui.Image?> _thumbs = {};
-  ui.Image? _thumbSource; // downscaled source for thumbnail rendering
+  // ── Render cache ───────────────────────────────────────────────────────────
   final Map<int, ui.Image> _previewBlurBases = {};
-  final Map<int, ui.Image> _thumbBlurBases = {};
   Timer? _renderDebounceTimer;
   Timer? _renderThrottleTimer;
   int _renderGeneration = 0;
@@ -88,14 +94,7 @@ class _EditorScreenState extends State<EditorScreen> {
     _previewImage?.dispose();
     _sourceBytes = null;
     _previewSource?.dispose();
-    _thumbSource?.dispose();
-    for (final t in _thumbs.values) {
-      t?.dispose();
-    }
     for (final image in _previewBlurBases.values) {
-      image.dispose();
-    }
-    for (final image in _thumbBlurBases.values) {
       image.dispose();
     }
     super.dispose();
@@ -144,9 +143,6 @@ class _EditorScreenState extends State<EditorScreen> {
     if (!mounted) return;
     // Refresh once full blur cache is ready.
     _scheduleDebouncedRender(immediate: true);
-
-    // Thumbnails are non-critical: build lazily in background.
-    unawaited(_prepareThumbPipeline());
   }
 
   Future<void> _markEditorReadyWhenMinimumTimeElapsed() async {
@@ -199,37 +195,6 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Thumbnail generation (downscaled, all effects, background)
-  // ─────────────────────────────────────────────────────────────────────────
-
-  Future<void> _generateThumbnails() async {
-    if (_thumbSource == null) return;
-    for (final effect in DistortionEffect.values) {
-      if (!mounted) return;
-      final blurredBase = _getCachedBlurLevel(
-        _thumbBlurBases,
-        0,
-        _thumbSource!,
-      );
-      final thumb = await _renderer.render(
-        source: _thumbSource!,
-        blurredBase: blurredBase,
-        effect: effect,
-        intensity: 1.0,
-      );
-      if (mounted) {
-        setState(() {
-          _thumbs[effect]?.dispose();
-          _thumbs[effect] = thumb;
-        });
-      } else {
-        thumb.dispose();
-        return;
-      }
-    }
-  }
-
   Future<void> _runBackgroundPrewarm() async {
     if (_previewSource == null) return;
     final source = _previewSource!;
@@ -262,24 +227,6 @@ class _EditorScreenState extends State<EditorScreen> {
   // ─────────────────────────────────────────────────────────────────────────
   // Helpers
   // ─────────────────────────────────────────────────────────────────────────
-
-  Future<ui.Image> _downscale(ui.Image src, {required int targetWidth}) async {
-    final tw = targetWidth.clamp(1, src.width);
-    final th = (src.height * (tw / src.width)).round().clamp(1, src.height);
-
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    canvas.drawImageRect(
-      src,
-      Rect.fromLTWH(0, 0, src.width.toDouble(), src.height.toDouble()),
-      Rect.fromLTWH(0, 0, tw.toDouble(), th.toDouble()),
-      Paint()..filterQuality = FilterQuality.medium,
-    );
-    final picture = recorder.endRecording();
-    final img = await picture.toImage(tw, th);
-    picture.dispose();
-    return img;
-  }
 
   Future<ui.Image> _decodePreviewFromBytes(Uint8List bytes) async {
     final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
@@ -363,24 +310,6 @@ class _EditorScreenState extends State<EditorScreen> {
       source: _previewSource!,
       presetLevel: level,
     );
-  }
-
-  Future<void> _prepareThumbPipeline() async {
-    final source = _previewSource;
-    if (source == null || !mounted) return;
-    final thumb = await _downscale(source, targetWidth: 200);
-    if (!mounted) {
-      thumb.dispose();
-      return;
-    }
-    _thumbSource?.dispose();
-    _thumbSource = thumb;
-    _thumbBlurBases[0]?.dispose();
-    _thumbBlurBases[0] = await _renderer.prepareBlurredBase(
-      source: _thumbSource!,
-      presetLevel: 0,
-    );
-    await _generateThumbnails();
   }
 
   ui.Image _getCachedBlurLevel(
@@ -646,7 +575,6 @@ class _EditorScreenState extends State<EditorScreen> {
                 snappedBlurIndex: _snappedBlurIndex,
                 blurSteps: _blurLevels - 1,
                 selectedEffect: _effect,
-                thumbs: _thumbs,
                 onBlurChanged: _onBlurChanged,
                 onBlurChangeStart: _onBlurDragStart,
                 onBlurChangeEnd: _onBlurDragEnd,
@@ -833,7 +761,6 @@ class _BottomPanel extends StatelessWidget {
   final int snappedBlurIndex;
   final int blurSteps;
   final DistortionEffect selectedEffect;
-  final Map<DistortionEffect, ui.Image?> thumbs;
   final ValueChanged<double> onBlurChanged;
   final ValueChanged<double> onBlurChangeStart;
   final ValueChanged<double> onBlurChangeEnd;
@@ -845,7 +772,6 @@ class _BottomPanel extends StatelessWidget {
     required this.snappedBlurIndex,
     required this.blurSteps,
     required this.selectedEffect,
-    required this.thumbs,
     required this.onBlurChanged,
     required this.onBlurChangeStart,
     required this.onBlurChangeEnd,
@@ -893,7 +819,6 @@ class _BottomPanel extends StatelessWidget {
           // Effect thumbnails.
           _EffectRow(
             selectedEffect: selectedEffect,
-            thumbs: thumbs,
             onSelect: onEffectSelected,
           ),
 
@@ -1227,12 +1152,10 @@ class _BlurSliderState extends State<_BlurSlider> {
 
 class _EffectRow extends StatelessWidget {
   final DistortionEffect selectedEffect;
-  final Map<DistortionEffect, ui.Image?> thumbs;
   final ValueChanged<DistortionEffect> onSelect;
 
   const _EffectRow({
     required this.selectedEffect,
-    required this.thumbs,
     required this.onSelect,
   });
 
@@ -1249,7 +1172,6 @@ class _EffectRow extends StatelessWidget {
           final effect = DistortionEffect.values[i];
           return _EffectThumb(
             effect: effect,
-            thumb: thumbs[effect],
             selected: effect == selectedEffect,
             onTap: () => onSelect(effect),
           );
@@ -1263,13 +1185,11 @@ class _EffectRow extends StatelessWidget {
 
 class _EffectThumb extends StatelessWidget {
   final DistortionEffect effect;
-  final ui.Image? thumb;
   final bool selected;
   final VoidCallback onTap;
 
   const _EffectThumb({
     required this.effect,
-    required this.thumb,
     required this.selected,
     required this.onTap,
   });
@@ -1305,23 +1225,26 @@ class _EffectThumb extends StatelessWidget {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(10),
-              child: thumb != null
-                  ? RawImage(
-                      image: thumb,
-                      fit: BoxFit.cover,
-                      width: 70,
-                      height: 90,
-                    )
-                  : const Center(
-                      child: SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 1.5,
-                          color: Colors.white24,
-                        ),
+              child: Image.asset(
+                kEffectPreviewAssets[effect]!,
+                fit: BoxFit.cover,
+                width: 70,
+                height: 90,
+                errorBuilder: (context, error, stackTrace) {
+                  return Container(
+                    color: const Color(0xFF141414),
+                    alignment: Alignment.center,
+                    child: Text(
+                      effect.label.substring(0, 1),
+                      style: const TextStyle(
+                        color: Colors.white38,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
+                  );
+                },
+              ),
             ),
           ),
           const SizedBox(height: 6),
