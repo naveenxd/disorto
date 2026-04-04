@@ -34,46 +34,63 @@ void main() {
     float hT = getHeight(gv + vec2(0.0, eps));
     vec2 normal2D = vec2(hC - hR, hC - hT) / eps;
 
-    // Refraction
-    vec2 refraction = normal2D * 0.012 * uIntensity;
+    // Subtle glass refraction - stronger where there's detail
+    vec2 refraction = normal2D * 0.04 * uIntensity;
     vec2 sampleUv = clamp(uv + refraction, 0.0, 1.0);
 
     vec3 base = texture(uSourceTexture, uv).rgb;
     vec3 glass = texture(uBlurTexture, sampleUv).rgb;
     vec3 color = mix(glass, base, clamp(uOriginalDetailWeight, 0.0, 1.0));
 
-    // Detect image variation (edges/texture)
-    // On flat/plain areas, this will be near zero → no grid effect
+    // Detect image variation - only apply where there's significant detail
     vec2 texelSize = vec2(1.0 / uWidth, 1.0 / uHeight);
     vec3 rightPixel = texture(uSourceTexture, uv + vec2(texelSize.x, 0.0)).rgb;
     vec3 topPixel = texture(uSourceTexture, uv + vec2(0.0, texelSize.y)).rgb;
-    float variation = length(base - rightPixel) + length(base - topPixel);
-    float activityMask = clamp(variation * 3.0, 0.0, 1.0);
+    vec3 leftPixel = texture(uSourceTexture, uv - vec2(texelSize.x, 0.0)).rgb;
+    vec3 bottomPixel = texture(uSourceTexture, uv - vec2(0.0, texelSize.y)).rgb;
+    
+    float variation = length(base - rightPixel) + length(base - topPixel) + 
+                      length(base - leftPixel) + length(base - bottomPixel);
+    
+    // Hard threshold - effect only applies on significant detail
+    float activityMask = step(0.15, variation);
 
-    // Only apply glass lighting where there's actual image detail
+    // Luminance
     float luminance = dot(color, vec3(0.299, 0.587, 0.114));
 
-    vec3 normal3D = normalize(vec3(normal2D.x, normal2D.y, 1.5));
-    vec3 lightDir = normalize(vec3(-1.0, -1.0, 1.2));
+    // Subtle glass surface normals
+    vec3 normal3D = normalize(vec3(normal2D.x, normal2D.y, 2.2));
+    vec3 lightDir = normalize(vec3(-0.5, -0.5, 1.0));
 
     float diffuse = max(dot(normal3D, lightDir), 0.0);
 
+    // Crisp, subtle specular for glass edge
     vec3 viewDir = vec3(0.0, 0.0, 1.0);
     vec3 halfDir = normalize(lightDir + viewDir);
-    float specular = pow(max(dot(normal3D, halfDir), 0.0), 20.0);
+    float specular = pow(max(dot(normal3D, halfDir), 0.0), 56.0);
 
     float slopeMask = 1.0 - hC;
 
-    vec3 shine = vec3(specular) * luminance * 1.5;
+    // Glass effect - more pronounced on detail areas
+    vec3 shine = vec3(specular) * (0.4 + luminance * 0.5) * 1.8;
 
-    // Mask everything by image activity → no effect on plain areas
-    color *= mix(1.0, diffuse * 1.5, slopeMask * uIntensity * activityMask);
+    // Apply shine only where there's detail
     color += shine * slopeMask * uIntensity * activityMask;
 
-    // Grout lines only visible where there's content
+    // Fine grid lines with tri-level appearance
     float boxDist = max(abs(gv.x), abs(gv.y));
-    float grout = smoothstep(0.48, 0.5, boxDist);
-    color *= mix(1.0, 0.2, grout * activityMask);
+    
+    // Thin outer highlight - visible on detail areas
+    float outerEdge = smoothstep(0.498, 0.495, boxDist);
+    color += vec3(0.2) * outerEdge * activityMask * uIntensity;
+    
+    // Fine dark grout line - stronger definition
+    float grout = smoothstep(0.501, 0.5, boxDist);
+    color *= mix(1.0, 0.65, grout * activityMask);
+    
+    // Inner shadow edge - visible depth
+    float innerEdge = smoothstep(0.490, 0.487, boxDist);
+    color *= mix(1.0, 0.88, innerEdge * activityMask);
 
     fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
 }
