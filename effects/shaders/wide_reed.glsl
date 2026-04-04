@@ -14,7 +14,7 @@ out vec4 fragColor;
 
 void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
-    float count = 14.0;
+    float count = 20.0;
     float bar = fract(uv.x * count);
     float normal = (bar - 0.5) * 2.0;
     float reed = normal * pow(abs(normal), 1.2);
