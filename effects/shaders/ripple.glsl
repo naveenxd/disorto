@@ -14,35 +14,21 @@ out vec4 fragColor;
 
 void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
-    float noise = fract(sin(dot((uv + vec2(uTime * 0.01, uTime * 0.012)) * 100.0, vec2(12.9898, 78.233))) * 43758.5453);
-    uv += (noise - 0.5) * 0.002;
-
     float aspect = uWidth / uHeight;
-    vec2 center = vec2(0.50, 0.56);
-    vec2 delta = uv - center;
-    delta.x *= aspect;
 
-    float dist = length(delta);
-    float lens = 1.0 - smoothstep(0.0, 0.34, dist);
-    float ring = sin(dist * 36.0 - uTime * 4.8) * smoothstep(0.44, 0.05, dist);
-    float outerRing = sin(dist * 22.0 - uTime * 2.4) * smoothstep(0.95, 0.20, dist);
-
-    float warpedRadius = dist * (1.0 - lens * 0.88 * uIntensity) +
-        ring * 0.040 * uIntensity +
-        outerRing * 0.016 * uIntensity;
+    vec2 center = vec2(0.5, 0.5);
+    vec2 delta  = (uv - center) * vec2(aspect, 1.0);
+    float dist  = length(delta);
     float angle = atan(delta.y, delta.x);
-    vec2 refractedUv = vec2(
-        center.x + cos(angle) * warpedRadius / aspect,
-        center.y + sin(angle) * warpedRadius
-    );
-    refractedUv = clamp(refractedUv, 0.0, 1.0);
 
-    vec3 base = texture(uSourceTexture, uv).rgb;
-    vec3 glass = texture(uBlurTexture, refractedUv).rgb;
-    vec3 color = mix(glass, base, clamp(uOriginalDetailWeight, 0.0, 1.0));
-    float edge = smoothstep(0.25, 0.0, dist);
-    color += lens * 0.12 * uIntensity + edge * 0.06 * uIntensity;
-    color *= 1.0 - edge * 0.06 * uIntensity;
+    float ripple = sin(dist * 30.0 - uTime * 4.0);
+    float newDist = dist + ripple * 0.05 * uIntensity;
 
-    fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+    vec2 warpedUV = center + vec2(cos(angle) / aspect, sin(angle)) * newDist;
+    warpedUV = clamp(warpedUV, 0.0, 1.0);
+
+    vec3 blurred  = texture(uBlurTexture,  warpedUV).rgb;
+    vec3 original = texture(uSourceTexture, warpedUV).rgb;
+
+    fragColor = vec4(clamp(mix(blurred, original, clamp(uOriginalDetailWeight, 0.0, 1.0)), 0.0, 1.0), 1.0);
 }
