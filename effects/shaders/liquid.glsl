@@ -16,7 +16,7 @@ void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
 
     float count = 10.0;
-    float curve = sin(uv.y * 3.14159 * 2.0 + uTime * 0.4) * 0.08;
+    float curve = sin(uv.y * 3.14159 * 2.8 - uTime * 0.4) * 0.08;
     float bar    = fract((uv.x + curve) * count);
 
     // Anti-alias the band edge — smooth 1px transition at seam
