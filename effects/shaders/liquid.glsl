@@ -14,27 +14,18 @@ out vec4 fragColor;
 
 void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
-    
-    // Create horizontal bands with wavy distortion
-    float count = 12.0;
-    float bar = fract(uv.x * count);
-    float normal = (bar - 0.5) * 2.0;
-    float reed = normal * pow(abs(normal), 1.2);
-    
-    // Add wave animation to make lines wavy instead of straight
-    float wave = sin(uv.y * 8.0 + uTime * 0.8) * 0.3;
-    float wave2 = sin(uv.x * 3.0 - uTime * 0.6) * 0.2;
-    
-    // Combine reed distortion with wave animation
-    float refractX = (reed + wave + wave2) * 0.185 * uIntensity;
-    
-    // Sample textures with refracted coordinates
-    vec3 blurred = texture(
-        uBlurTexture,
-        clamp(vec2(uv.x + refractX, uv.y), 0.0, 1.0)
-    ).rgb;
-    vec3 original = texture(uSourceTexture, uv).rgb;
-    vec3 color = mix(blurred, original, clamp(uOriginalDetailWeight, 0.0, 1.0));
 
-    fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+    // Wide reed — but bend the bands using uv.y so lines curve instead of straight
+    float count = 10.0;
+    float curve = sin(uv.y * 3.14159 * 2.0 + uTime * 0.4) * 0.08;
+    float bar   = fract((uv.x + curve) * count);
+    float normal = (bar - 0.5) * 2.0;
+    float reed  = normal * pow(abs(normal), 1.2);
+
+    float refractX = reed * 0.185 * uIntensity;
+
+    vec3 blurred  = texture(uBlurTexture,  clamp(vec2(uv.x + refractX, uv.y), 0.0, 1.0)).rgb;
+    vec3 original = texture(uSourceTexture, uv).rgb;
+
+    fragColor = vec4(clamp(mix(blurred, original, clamp(uOriginalDetailWeight, 0.0, 1.0)), 0.0, 1.0), 1.0);
 }
