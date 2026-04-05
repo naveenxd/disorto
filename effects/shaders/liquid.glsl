@@ -16,7 +16,7 @@ void main() {
     vec2 uv = FlutterFragCoord().xy / vec2(uWidth, uHeight);
 
     float count = 10.0;
-    float curve = sin(uv.y * 3.14159 * 2.8 - uTime * 0.4) * 0.08;
+    float curve = -sin(uv.y * 3.14159 * 2.8 - uTime * 0.4) * 0.08;
     float bar    = fract((uv.x + curve) * count);
 
     // Anti-alias the band edge — smooth 1px transition at seam
@@ -36,7 +36,7 @@ void main() {
 
     float lensCurve = cos(normal * 3.14159 * 0.5);
     float shadow    = lensCurve * 0.10;
-    float fresnel   = pow(abs(normal), 5.0) * 0.06;
+    float fresnel   = pow(abs(normal), 5.0) * 0.02;
 
     color -= shadow;
     color += fresnel;
