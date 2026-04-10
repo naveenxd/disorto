@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
-import 'loader_screen.dart';
+import 'editor_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HomeScreen
@@ -90,7 +90,7 @@ class _HomeScreenState extends State<HomeScreen>
       orElse: () => files.first,
     );
     ReceiveSharingIntent.instance.reset();
-    _navigateToEditor(image.path);
+    unawaited(_navigateToEditor(image.path));
   }
 
   // ── Image picker ───────────────────────────────────────────────────────────
@@ -108,15 +108,39 @@ class _HomeScreenState extends State<HomeScreen>
       );
 
       if (picked != null && mounted) {
-        _navigateToEditor(picked.path);
+        await _navigateToEditor(picked.path);
       }
     } finally {
       if (mounted) setState(() => _picking = false);
     }
   }
 
-  void _navigateToEditor(String path) {
-    Navigator.of(context).push(buildLoaderRoute(File(path)));
+  Future<void> _navigateToEditor(String path) async {
+    try {
+      final data = await prepareInitialState(File(path));
+      if (!mounted) return;
+      Navigator.of(context).push(
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 400),
+          pageBuilder: (context, animation, secondaryAnimation) =>
+              EditorScreen(data: data),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return FadeTransition(
+              opacity: CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+              child: child,
+            );
+          },
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to open editor: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
