@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import 'screens/home_screen.dart';
-import 'screens/loader_screen.dart';
+import 'screens/editor_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Entry point
@@ -172,6 +172,7 @@ class _AppShellState extends State<_AppShell> {
 
   // Non-null when a shared image was found on cold start.
   String? _sharedImagePath;
+  EditorScreenData? _sharedData;
 
   @override
   void initState() {
@@ -196,10 +197,19 @@ class _AppShellState extends State<_AppShell> {
         ReceiveSharingIntent.instance.reset();
 
         if (mounted) {
-          setState(() {
-            _sharedImagePath = image.path;
-            _resolved = true;
-          });
+          setState(() => _sharedImagePath = image.path);
+          
+          try {
+            final data = await prepareInitialState(File(image.path));
+            if (mounted) {
+              setState(() {
+                _sharedData = data;
+                _resolved = true;
+              });
+            }
+          } catch (_) {
+            if (mounted) setState(() => _resolved = true);
+          }
         }
         return;
       }
@@ -223,8 +233,8 @@ class _AppShellState extends State<_AppShell> {
     }
 
     // Cold-start share detected → go straight to editor.
-    if (_sharedImagePath != null) {
-      return LoaderScreen(image: File(_sharedImagePath!));
+    if (_sharedData != null) {
+      return EditorScreen(data: _sharedData!);
     }
 
     // Normal launch → show home.
