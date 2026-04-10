@@ -22,6 +22,7 @@ class _HomeScreenState extends State<HomeScreen>
     with SingleTickerProviderStateMixin {
   // ── State ──────────────────────────────────────────────────────────────────
   bool _picking = false;
+  final _picker = ImagePicker();
   late final AnimationController _wordmarkCtrl;
   late final Animation<double> _wordmarkOpacity;
   late final Animation<Offset> _wordmarkSlide;
@@ -100,8 +101,7 @@ class _HomeScreenState extends State<HomeScreen>
     setState(() => _picking = true);
 
     try {
-      final picker = ImagePicker();
-      final picked = await picker.pickImage(
+      final picked = await _picker.pickImage(
         source: ImageSource.gallery,
         // We always export at original resolution (see context §Export).
         imageQuality: 100,
@@ -271,11 +271,11 @@ class _SelectButtonState extends State<_SelectButton>
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTapDown: (_) => _hoverCtrl.forward(),
-      onTapUp: (_) {
+      onTap: () {
         _hoverCtrl.reverse();
         if (!widget.loading) widget.onTap();
       },
+      onTapDown: (_) => _hoverCtrl.forward(),
       onTapCancel: () => _hoverCtrl.reverse(),
       child: ScaleTransition(
         scale: _scale,
