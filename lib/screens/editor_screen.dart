@@ -10,7 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import '../effects/effect_renderer.dart';
 import '../services/image_export_service.dart';
 import '../services/wallpaper_service.dart';
-import '../widgets/nothing_loading_overlay.dart';
+
 
 class EditorScreenData {
   final String imagePath;
@@ -168,7 +168,6 @@ class _EditorScreenState extends State<EditorScreen> {
   // ── Saving state ──────────────────────────────────────────────────────────
   bool _saving = false;
   bool _wallpapering = false;
-  late final ImageProvider _loadingBackground;
 
   // ─────────────────────────────────────────────────────────────────────────
   // Lifecycle
@@ -182,7 +181,6 @@ class _EditorScreenState extends State<EditorScreen> {
     _previewSource = widget.data.previewSource;
     _previewImage = widget.data.previewImage;
     _previewBlurBases.addAll(widget.data.previewBlurBases);
-    _loadingBackground = FileImage(File(widget.data.imagePath));
   }
 
   @override
@@ -606,15 +604,6 @@ class _EditorScreenState extends State<EditorScreen> {
                 onEffectSelected: _onEffectSelected,
               ),
             ),
-            if (_saving || _wallpapering)
-              Positioned.fill(
-                child: IgnorePointer(
-                  ignoring: false,
-                  child: NothingLoadingOverlay(
-                    backgroundImage: _loadingBackground,
-                  ),
-                ),
-              ),
           ],
         ),
       ),
