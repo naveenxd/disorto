@@ -31,18 +31,10 @@ class ImageExportService {
       throw ExportException('Image file not found at path: $imagePath');
     }
 
-    // Check / request gallery access.  Gal handles the permission dialog
-    // internally on first call; we explicitly check so we can show a friendly
-    // error if the user permanently denies.
-    final hasAccess = await Gal.hasAccess(toAlbum: false);
-    if (!hasAccess) {
-      final granted = await Gal.requestAccess(toAlbum: false);
-      if (!granted) {
-        throw ExportException(
-          'Gallery access denied. Grant permission in Settings to save images.',
-        );
-      }
-    }
+    // On modern Android (10+), Gal does not require permissions to save to gallery.
+    // For older versions, it handles them internally or we can let it throw.
+    // We'll skip the explicit check here to avoid issues where hasAccess returns false
+    // on devices that don't actually need it.
 
     try {
       await Gal.putImage(imagePath);
@@ -67,16 +59,8 @@ class ImageExportService {
     ui.Image image, {
     String name = 'distorto',
   }) async {
-    // Check / request gallery access.
-    final hasAccess = await Gal.hasAccess(toAlbum: false);
-    if (!hasAccess) {
-      final granted = await Gal.requestAccess(toAlbum: false);
-      if (!granted) {
-        throw ExportException(
-          'Gallery access denied. Grant permission in Settings to save images.',
-        );
-      }
-    }
+    // Skip explicit permission checks as Gal handles them and modern Android 
+    // doesn't require them for saving.
 
     // Encode to PNG bytes.
     final byteData = await image.toByteData(format: ui.ImageByteFormat.png);

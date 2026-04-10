@@ -251,16 +251,45 @@ class _EditorScreenState extends State<EditorScreen> {
   // ─────────────────────────────────────────────────────────────────────────
 
   Future<ui.Image> _decodeOriginalFromBytes(Uint8List bytes) async {
+    const maxExportDimension = 2560; // Enough for QHD+ and safe for memory
+
     final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
-    final codec = await ui.instantiateImageCodecFromBuffer(buffer);
+    final descriptor = await ui.ImageDescriptor.encoded(buffer);
+    
+    int targetWidth = descriptor.width;
+    int targetHeight = descriptor.height;
+    
+    final longestEdge = math.max(targetWidth, targetHeight);
+    if (longestEdge > maxExportDimension) {
+      final scale = maxExportDimension / longestEdge;
+      targetWidth = (targetWidth * scale).round();
+      targetHeight = (targetHeight * scale).round();
+    }
+
+    final codec = await descriptor.instantiateCodec(
+      targetWidth: targetWidth,
+      targetHeight: targetHeight,
+    );
     final frame = await codec.getNextFrame();
     codec.dispose();
+    descriptor.dispose();
     buffer.dispose();
     return frame.image;
   }
 
   Future<String> _exportToTemp() async {
-    final dir = await getTemporaryDirectory();
+    Directory dir;
+    if (Platform.isAndroid) {
+      // Use external cache on Android so system services (like WallpaperManager)
+      // can access the file. Internal cache is often restricted.
+      final externalDirs = await getExternalCacheDirectories();
+      dir = (externalDirs?.isNotEmpty ?? false)
+          ? externalDirs!.first
+          : await getTemporaryDirectory();
+    } else {
+      dir = await getTemporaryDirectory();
+    }
+
     final outPath =
         '${dir.path}/distorto_export_${DateTime.now().millisecondsSinceEpoch}.png';
 
