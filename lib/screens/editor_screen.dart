@@ -499,28 +499,17 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _onSetWallpaper() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF111111),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => _WallpaperSheet(
-        onSelect: (location) {
-          Navigator.pop(ctx);
-          _applyWallpaper(location);
-        },
-      ),
-    );
+    _applyWallpaper();
   }
 
-  Future<void> _applyWallpaper(int location) async {
+  Future<void> _applyWallpaper() async {
     if (_wallpapering) return;
     setState(() => _wallpapering = true);
     try {
       final path = await _exportToTemp();
-      await WallpaperService.setWallpaper(imagePath: path, location: location);
-      if (mounted) _showSnack('Wallpaper set ✓');
+      await WallpaperService.setWallpaper(imagePath: path);
+      // We don't show a 'success' snackbar here because the system picker
+      // is now open and the user is interacting with it.
     } on WallpaperException catch (e) {
       if (mounted) _showSnack(e.message);
     } catch (e) {
@@ -1280,106 +1269,3 @@ class _EffectThumb extends StatelessWidget {
 // _WallpaperSheet — modal bottom sheet for wallpaper location
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _WallpaperSheet extends StatelessWidget {
-  final ValueChanged<int> onSelect;
-
-  const _WallpaperSheet({required this.onSelect});
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Set Wallpaper',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -0.3,
-              ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Choose where to apply',
-              style: TextStyle(color: Color(0xFF888888), fontSize: 12),
-            ),
-            const SizedBox(height: 20),
-
-            _WallpaperOption(
-              icon: Icons.home_outlined,
-              label: 'Home Screen',
-              onTap: () => onSelect(WallpaperService.homeScreen),
-            ),
-            const SizedBox(height: 10),
-            _WallpaperOption(
-              icon: Icons.lock_outline_rounded,
-              label: 'Lock Screen',
-              onTap: () => onSelect(WallpaperService.lockScreen),
-            ),
-            const SizedBox(height: 10),
-            _WallpaperOption(
-              icon: Icons.layers_outlined,
-              label: 'Both',
-              onTap: () => onSelect(WallpaperService.bothScreens),
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _WallpaperOption extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  const _WallpaperOption({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1A1A1A),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFF2A2A2A), width: 0.8),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.white, size: 20),
-            const SizedBox(width: 12),
-            Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 15,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            const Spacer(),
-            const Icon(
-              Icons.arrow_forward_ios_rounded,
-              color: Color(0xFF444444),
-              size: 14,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

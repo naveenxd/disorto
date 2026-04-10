@@ -1,69 +1,27 @@
 import 'dart:io';
+import 'package:flutter/services.dart';
 
-import 'package:wallpaper_manager_plus/wallpaper_manager_plus.dart';
-
-/// Thin wrapper around [WallpaperManagerPlus] that applies a locally-stored
-/// image as the device wallpaper.
-///
-/// ### Location constants (re-exported for convenience)
-/// ```dart
-/// WallpaperService.homeScreen   // home screen only
-/// WallpaperService.lockScreen   // lock screen only
-/// WallpaperService.bothScreens  // both home + lock
-/// ```
-///
-/// ### Usage
-/// ```dart
-/// await WallpaperService.setWallpaper(
-///   imagePath: '/data/user/0/.../distorto_export_123.png',
-///   location:  WallpaperService.homeScreen,
-/// );
-/// ```
+/// Service that delegates wallpaper selection to the system OS.
 class WallpaperService {
-  WallpaperService._(); // non-instantiable
+  WallpaperService._();
 
-  // ── Location constants (forwarded from WallpaperManagerPlus) ─────────────
+  static const _channel = MethodChannel('in.devh.distorto/wallpaper');
 
-  /// Apply to the home screen only.
-  static const int homeScreen   = WallpaperManagerPlus.homeScreen;
-
-  /// Apply to the lock screen only.
-  static const int lockScreen   = WallpaperManagerPlus.lockScreen;
-
-  /// Apply to both home and lock screens.
-  static const int bothScreens  = WallpaperManagerPlus.bothScreens;
-
-  // ── Public API ─────────────────────────────────────────────────────────────
-
-  /// Sets the wallpaper from a local file at [imagePath].
+  /// Opens the system's "Set as Wallpaper" picker for the image at [imagePath].
   ///
-  /// [location] must be one of [homeScreen], [lockScreen], or [bothScreens].
-  ///
-  /// Throws a [WallpaperException] if the platform call fails.
-  static Future<void> setWallpaper({
-    required String imagePath,
-    required int location,
-  }) async {
-    assert(
-      location == homeScreen ||
-          location == lockScreen ||
-          location == bothScreens,
-      'location must be one of WallpaperService.homeScreen / lockScreen / bothScreens',
-    );
-
+  /// This allows the system to handle cropping, scrolling options, and
+  /// target selection (Home/Lock).
+  static Future<void> setWallpaper({required String imagePath}) async {
     final file = File(imagePath);
-
     if (!file.existsSync()) {
-      throw WallpaperException(
-        'Image file not found at path: $imagePath',
-      );
+      throw WallpaperException('Image file not found at path: $imagePath');
     }
 
     try {
-      await WallpaperManagerPlus().setWallpaper(file, location);
+      await _channel.invokeMethod('openWallpaperPicker', {'path': imagePath});
     } catch (e, st) {
       throw WallpaperException(
-        'Failed to set wallpaper: $e',
+        'Failed to open system wallpaper picker: $e',
         cause: e,
         stackTrace: st,
       );
@@ -71,11 +29,6 @@ class WallpaperService {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// WallpaperException
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Thrown when [WallpaperService.setWallpaper] fails.
 class WallpaperException implements Exception {
   const WallpaperException(this.message, {this.cause, this.stackTrace});
 
